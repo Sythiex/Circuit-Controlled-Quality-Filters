@@ -578,12 +578,15 @@ local function process_enabled_entity(entity)
     local signals = gather_signals(entity)
     local qualities = extract_quality_signals_sorted(signals)
     local comparator, conflict = extract_comparator_signal(signals)
+    local filters = {}
+
+    -- clear filters if strongest comparator signals are tied
     if conflict then
+        apply_inserter_filters(entity, filters)
         return
     end
 
     -- Build desired filters in sorted order
-    local filters = {}
     for i, entry in ipairs(qualities) do
         filters[i] = {
             quality = entry.quality,
