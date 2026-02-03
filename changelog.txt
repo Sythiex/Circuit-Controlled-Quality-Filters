@@ -1,0 +1,7 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.2.0
+Date: 2026.02.03
+  Features:
+    - Added support for item signals to set item+quality filters
+  Bugfixes:
+    - Fixed filters not updating if two or more comparator signals are tied for the highest value

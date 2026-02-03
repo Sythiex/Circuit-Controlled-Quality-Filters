@@ -292,7 +292,8 @@ script.on_event(destroy_events, function(e)
 end)
 
 local build_events = {
-    defines.events.on_built_entity, defines.events.on_robot_built_entity, defines.events.on_space_platform_built_entity, defines.events.script_raised_built, defines.events.script_raised_revive}
+    defines.events.on_built_entity, defines.events.on_robot_built_entity, defines.events.on_space_platform_built_entity, defines.events.script_raised_built, defines.events.script_raised_revive
+}
 
 script.on_event(build_events, function(e)
     local entity = e.entity
@@ -493,6 +494,59 @@ local function extract_quality_signals_sorted(combined_signals)
     return present
 end
 
+local function is_item_signal(id)
+    if not id or not id.name then
+        return false
+    end
+    if id.type == "item" or id.type == "item-with-quality" then
+        return true
+    end
+    return prototypes.item[id.name] ~= nil
+end
+
+-- Filter/sort item signals out of a combined signal list
+-- Input: array of { signal = SignalID, count = int }
+-- Returns: array of { name = string, value = int, order = string }
+local function extract_item_signals_sorted(combined_signals)
+    local by_name = {}
+
+    for _, s in ipairs(combined_signals or {}) do
+        local id = s.signal
+        local c = s.count or 0
+        if is_item_signal(id) and c > 0 then
+            local entry = by_name[id.name]
+            if entry then
+                entry.value = entry.value + c
+            else
+                local proto = prototypes.item[id.name]
+                by_name[id.name] = {
+                    name = id.name,
+                    value = c,
+                    order = proto and proto.order or ""
+                }
+            end
+        end
+    end
+
+    local present = {}
+    for _, v in pairs(by_name) do
+        present[#present + 1] = v
+    end
+
+    -- sort: signal count desc, then item order, then name
+    table.sort(present, function(a, b)
+        if a.value ~= b.value then
+            return a.value > b.value
+        end
+        if a.order ~= b.order then
+            return a.order < b.order
+        end
+        return a.name < b.name
+    end)
+
+    return present
+end
+
 -- Returns:
 --   comparator :: ComparatorString (e.g. "=", ">", "<", ">=", "<=", "!=")
 --   conflict   :: boolean  (true if strongest comparator is tied with another)
@@ -577,6 +631,7 @@ local function process_enabled_entity(entity)
 
     local signals = gather_signals(entity)
     local qualities = extract_quality_signals_sorted(signals)
+    local items = extract_item_signals_sorted(signals)
     local comparator, conflict = extract_comparator_signal(signals)
     local filters = {}
 
@@ -587,11 +642,31 @@ local function process_enabled_entity(entity)
     end
 
     -- Build desired filters in sorted order
-    for i, entry in ipairs(qualities) do
-        filters[i] = {
-            quality = entry.quality,
-            comparator = comparator
-        }
+    if #items > 0 and qualities[1] then
+        local slot = 1
+        for _, q in ipairs(qualities) do
+            for _, it in ipairs(items) do
+                filters[slot] = {
+                    name = it.name,
+                    quality = q.quality,
+                    comparator = comparator
+                }
+                slot = slot + 1
+                if slot > max_slots then
+                    break
+                end
+            end
+            if slot > max_slots then
+                break
+            end
+        end
+    else
+        for i, entry in ipairs(qualities) do
+            filters[i] = {
+                quality = entry.quality,
+                comparator = comparator
+            }
+        end
     end
 
     apply_inserter_filters(entity, filters)
