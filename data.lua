@@ -12,3 +12,7 @@ end
 for _, proto in pairs(data.raw["inserter"] or {}) do
     proto.flags = add_flag(proto.flags, "get-by-unit-number")
 end
+
+for _, proto in pairs(data.raw["splitter"] or {}) do
+    proto.flags = add_flag(proto.flags, "get-by-unit-number")
+end

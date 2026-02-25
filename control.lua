@@ -17,12 +17,13 @@ local function state()
     storage.quality_filter_control = storage.quality_filter_control or {}
     local s = storage.quality_filter_control
     s.enabled_by_unit = s.enabled_by_unit or {} -- [unit_number] = true/nil
-    s.open_entity_by_player = s.open_entity_by_player or {} -- [player_index] = LuaEntity (inserter or ghost)
+    s.open_entity_by_player = s.open_entity_by_player or {} -- [player_index] = LuaEntity (supported entity or ghost)
     s.recent_replace_by_pos = s.recent_replace_by_pos or {} -- [pos_key] = { enabled=bool, tick=uint } - used for fast-replace
 
     -- use for scanning updates
     s.enabled_unit_array = s.enabled_unit_array or {} -- array of unit_numbers
     s.enabled_index = s.enabled_index or 1 -- round-robin position
+    s.gui_type_by_player = s.gui_type_by_player or {} -- [player_index] = relative_gui_type
 
     return s
 end
@@ -33,12 +34,18 @@ local function debug_print(msg)
     end
 end
 
-local function is_inserter_or_ghost_inserter(entity)
-    return entity and entity.valid and entity.unit_number ~= nil and (entity.type == "inserter" or (entity.type == "entity-ghost" and entity.ghost_type == "inserter"))
+local function get_entity_type(entity)
+    if not (entity and entity.valid) then
+        return nil
+    end
+    if entity.type == "entity-ghost" then
+        return entity.ghost_type
+    end
+    return entity.type
 end
 
--- Turns off "Set filters" from circuit network, turns on "Use filters", turns on "Whitelist"
-local function ensure_correct_filter_settings(entity)
+-- Turns off "Set filters" from circuit network, turns on "Use filters", turns on "Whitelist" for inserters
+local function ensure_correct_filter_settings_inserter(entity)
     if not (entity and entity.valid and entity.type == "inserter") then
         return
     end
@@ -61,40 +68,165 @@ local function ensure_correct_filter_settings(entity)
     end
 end
 
-local function set_enabled(entity, enabled)
-    local s = state()
-    if entity.type == "inserter" then
-        local unit = entity.unit_number
-        local was_enabled = (s.enabled_by_unit[unit] == true)
-        local now_enabled = (enabled == true)
-
-        if now_enabled then
-            if not was_enabled then
-                table.insert(s.enabled_unit_array, unit)
-            end
-            s.enabled_by_unit[unit] = true
-            ensure_correct_filter_settings(entity)
-        else
-            s.enabled_by_unit[unit] = nil
-        end
+-- Turns off "Set filters" from circuit network for splitters
+local function ensure_correct_filter_settings_splitter(entity)
+    if not (entity and entity.valid and entity.type == "splitter") then
         return
     end
 
-    -- ghost tags
-    local tags = entity.tags or {}
-    tags[TAG_KEY] = enabled and true or nil
-    entity.tags = tags
+    local control_behavior = entity.get_control_behavior()
+    if control_behavior and control_behavior.valid and control_behavior.set_filter then
+        control_behavior.set_filter = false
+    end
+
+end
+
+local ENTITY_CONFIG = {
+    inserter = {
+        gui = defines.relative_gui_type.inserter_gui,
+        ensure_settings = ensure_correct_filter_settings_inserter,
+        get_max_filters = function(entity)
+            return entity.filter_slot_count or 0
+        end,
+        get_filter = function(entity, index)
+            return entity.get_filter(index)
+        end,
+        set_filter = function(entity, index, value)
+            entity.set_filter(index, value)
+        end,
+        allow_quality_only = true,
+        allow_item_quality = true
+    },
+    splitter = {
+        gui = defines.relative_gui_type.splitter_gui,
+        ensure_settings = ensure_correct_filter_settings_splitter,
+        get_max_filters = function(_)
+            return 1
+        end,
+        get_filter = function(entity, index)
+            if index == 1 then
+                return entity.splitter_filter
+            end
+            return nil
+        end,
+        set_filter = function(entity, index, value)
+            if index == 1 then
+                entity.splitter_filter = value
+            end
+        end,
+        allow_quality_only = true,
+        allow_item_quality = true
+    }
+}
+
+local function get_entity_config(entity)
+    local entity_type = get_entity_type(entity)
+    if not entity_type then
+        return nil
+    end
+    return ENTITY_CONFIG[entity_type]
+end
+
+local function get_max_filters(entity)
+    local cfg = get_entity_config(entity)
+    if not cfg or not cfg.get_max_filters then
+        return 0
+    end
+    return cfg.get_max_filters(entity) or 0
+end
+
+local function get_filter_at(entity, index)
+    local cfg = get_entity_config(entity)
+    if not cfg or not cfg.get_filter then
+        return nil
+    end
+    return cfg.get_filter(entity, index)
+end
+
+local function set_filter_at(entity, index, value)
+    local cfg = get_entity_config(entity)
+    if not cfg or not cfg.set_filter then
+        return
+    end
+    cfg.set_filter(entity, index, value)
+end
+
+local function is_supported_entity(entity)
+    if not (entity and entity.valid and entity.unit_number and entity.type ~= "entity-ghost") then
+        return false
+    end
+
+    if not get_entity_config(entity) then
+        return false
+    end
+
+    if get_max_filters(entity) == 0 then
+        return false
+    end
+
+    return true
+end
+
+local function is_supported_or_ghost(entity)
+    if not (entity and entity.valid) then
+        return false
+    end
+
+    if entity.type == "entity-ghost" then
+        return ENTITY_CONFIG[entity.ghost_type] ~= nil
+    end
+
+    return is_supported_entity(entity)
+end
+
+local function set_enabled(entity, enabled)
+    local s = state()
+    if entity.type == "entity-ghost" then
+        -- ghost tags
+        local tags = entity.tags or {}
+        tags[TAG_KEY] = enabled and true or nil
+        entity.tags = tags
+        return
+    end
+
+    if not is_supported_entity(entity) then
+        return
+    end
+
+    local cfg = get_entity_config(entity)
+    if not cfg then
+        return
+    end
+
+    local unit = entity.unit_number
+    local was_enabled = (s.enabled_by_unit[unit] == true)
+    local now_enabled = (enabled == true)
+
+    if now_enabled then
+        if not was_enabled then
+            table.insert(s.enabled_unit_array, unit)
+        end
+        s.enabled_by_unit[unit] = true
+        if cfg.ensure_settings then
+            cfg.ensure_settings(entity)
+        end
+    else
+        s.enabled_by_unit[unit] = nil
+    end
 end
 
 local function get_enabled(entity)
     local s = state()
-    if entity.type == "inserter" then
-        return s.enabled_by_unit[entity.unit_number] == true
+    if entity.type == "entity-ghost" then
+        local tags = entity.tags
+        return tags and tags[TAG_KEY] == true or false
     end
 
-    -- ghost tags
-    local tags = entity.tags
-    return tags and tags[TAG_KEY] == true or false
+    if not is_supported_entity(entity) then
+        return false
+    end
+
+    return s.enabled_by_unit[entity.unit_number] == true
 end
 
 local function get_checkbox(player)
@@ -109,26 +241,52 @@ local function get_checkbox(player)
     return nil
 end
 
+local function destroy_gui(player)
+    local relative = player.gui.relative
+    if not relative then
+        return
+    end
+    local root = relative[ROOT_NAME]
+    if root and root.valid then
+        root.destroy()
+    end
+    local s = state()
+    s.gui_type_by_player[player.index] = nil
+end
+
 -- create the setting gui for the player if needed
-local function ensure_gui(player)
+local function ensure_gui(player, entity)
     local relative = player.gui.relative
 
-    if relative[ROOT_NAME] and relative[ROOT_NAME].valid then
+    local cfg = get_entity_config(entity)
+    if not cfg then
+        destroy_gui(player)
         return
     end
 
-    -- Create frame anchored to the inserter GUI
+    local s = state()
+    local root = relative[ROOT_NAME]
+    if root and root.valid then
+        if s.gui_type_by_player[player.index] == cfg.gui then
+            return
+        end
+        root.destroy()
+    end
+
+    -- Create frame anchored to the entity GUI
     local frame = relative.add {
         type = "frame",
         name = ROOT_NAME,
         direction = "vertical",
         caption = {"", ""},
         anchor = {
-            gui = defines.relative_gui_type.inserter_gui,
+            gui = cfg.gui,
             position = defines.relative_gui_position.right,
             ghost_mode = "both"
         }
     }
+
+    s.gui_type_by_player[player.index] = cfg.gui
 
     frame.add {
         type = "checkbox",
@@ -138,9 +296,9 @@ local function ensure_gui(player)
     }
 end
 
-local function ensure_gui_for_all_players()
+local function destroy_gui_for_all_players()
     for _, player in pairs(game.players) do
-        ensure_gui(player)
+        destroy_gui(player)
     end
 end
 
@@ -171,7 +329,7 @@ script.on_init(function()
     update_batch_size()
     local s = state()
     s.open_entity_by_player = {}
-    ensure_gui_for_all_players()
+    destroy_gui_for_all_players()
     rebuild_enabled_unit_array(s)
 end)
 
@@ -179,7 +337,7 @@ script.on_configuration_changed(function()
     update_batch_size()
     local s = state()
     s.open_entity_by_player = {}
-    ensure_gui_for_all_players()
+    destroy_gui_for_all_players()
     rebuild_enabled_unit_array(s)
 end)
 
@@ -208,24 +366,23 @@ end)
 script.on_event(defines.events.on_player_created, function(e)
     local player = game.get_player(e.player_index)
     if player then
-        ensure_gui(player)
+        destroy_gui(player)
     end
 end)
 
--- Whenever an inserter GUI is opened, save which inserter it is and sync checkbox from storage
+-- Whenever a supported entity GUI is opened, save which entity it is and sync checkbox from storage
 script.on_event(defines.events.on_gui_opened, function(e)
     local player = game.get_player(e.player_index)
     if not player then
         return
     end
 
-    ensure_gui(player)
-
     local s = state()
     local entity = e.entity
 
-    if is_inserter_or_ghost_inserter(entity) then
-        s.open_entity_by_player[e.player_index] = entity -- save which inserter the player has open
+    if is_supported_or_ghost(entity) then
+        ensure_gui(player, entity)
+        s.open_entity_by_player[e.player_index] = entity -- save which entity the player has open
 
         local checkbox = get_checkbox(player)
         if checkbox then
@@ -233,10 +390,11 @@ script.on_event(defines.events.on_gui_opened, function(e)
         end
     else
         s.open_entity_by_player[e.player_index] = nil
+        destroy_gui(player)
     end
 end)
 
--- Clear "currently open inserter" when GUI closes
+-- Clear "currently open entity" when GUI closes
 if defines.events.on_gui_closed then
     script.on_event(defines.events.on_gui_closed, function(e)
         local s = state()
@@ -244,7 +402,7 @@ if defines.events.on_gui_closed then
     end)
 end
 
--- Handle checkbox changes and store them per inserter by unit_number
+-- Handle checkbox changes and store them per entity by unit_number
 script.on_event(defines.events.on_gui_checked_state_changed, function(e)
     local element = e.element
     if not (element and element.valid and element.name == CHECKBOX_NAME) then
@@ -253,14 +411,14 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(e)
 
     local s = state()
     local entity = s.open_entity_by_player[e.player_index]
-    if not is_inserter_or_ghost_inserter(entity) then
+    if not is_supported_or_ghost(entity) then
         return
     end
 
     set_enabled(entity, element.state)
 end)
 
--- Cleanup stored state when inserter is removed to avoid stale entries
+-- Cleanup stored state when entity is removed to avoid stale entries
 local function cleanup_entity(entity)
     if not (entity and entity.valid and entity.unit_number) then
         return
@@ -278,7 +436,7 @@ local destroy_events = {defines.events.on_player_mined_entity, defines.events.on
 
 script.on_event(destroy_events, function(e)
     local entity = e.entity
-    if entity and entity.valid and entity.type == "inserter" and entity.unit_number then
+    if is_supported_entity(entity) then
         if get_enabled(entity) then
             local s = state()
             s.recent_replace_by_pos[pos_key(entity)] = {
@@ -297,7 +455,7 @@ local build_events = {
 
 script.on_event(build_events, function(e)
     local entity = e.entity
-    if not (entity and entity.valid and entity.type == "inserter" and entity.unit_number) then
+    if not is_supported_entity(entity) then
         return
     end
 
@@ -329,7 +487,7 @@ local function sync_checkbox_for_entity(changed_entity)
             if open_entity == changed_entity or ((open_entity.unit_number ~= nil) and (changed_entity.unit_number ~= nil) and open_entity.unit_number == changed_entity.unit_number) then
                 local player = game.get_player(player_index)
                 if player then
-                    ensure_gui(player)
+                    ensure_gui(player, open_entity)
                     local checkbox = get_checkbox(player)
                     if checkbox then
                         checkbox.state = get_enabled(changed_entity)
@@ -346,7 +504,7 @@ script.on_event(copy_events, function(e)
     local source = e.source
     local destination = e.destination
 
-    if not (is_inserter_or_ghost_inserter(source) and is_inserter_or_ghost_inserter(destination)) then
+    if not (is_supported_or_ghost(source) and is_supported_or_ghost(destination)) then
         return
     end
 
@@ -375,7 +533,7 @@ local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_la
 
     for _, be in ipairs(entities) do
         local source = mapping[be.entity_number]
-        if source and source.valid and is_inserter_or_ghost_inserter(source) then
+        if source and source.valid and is_supported_or_ghost(source) then
             blueprint_stack.set_blueprint_entity_tag(be.entity_number, TAG_KEY, get_enabled(source) and true or nil)
         end
     end
@@ -607,24 +765,41 @@ local function are_filters_equal(a, b)
 end
 
 -- desired_filters: array of ItemFilter (or nil)
-local function apply_inserter_filters(entity, desired_filters)
-    if not (entity and entity.valid and entity.type == "inserter") then
+local function apply_entity_filters(entity, desired_filters)
+    if not is_supported_entity(entity) then
         return
     end
 
-    ensure_correct_filter_settings(entity)
+    local cfg = get_entity_config(entity)
+    if not cfg then
+        return
+    end
 
-    for i = 1, entity.filter_slot_count do
+    if cfg.ensure_settings then
+        cfg.ensure_settings(entity)
+    end
+
+    local max_slots = get_max_filters(entity)
+    for i = 1, max_slots do
         local want = desired_filters[i]
-        local current = entity.get_filter(i)
+        local current = get_filter_at(entity, i)
         if not are_filters_equal(current, want) then
-            entity.set_filter(i, want)
+            set_filter_at(entity, i, want)
         end
     end
 end
 
 local function process_enabled_entity(entity)
-    local max_slots = entity.filter_slot_count or 0
+    if not is_supported_entity(entity) then
+        return
+    end
+
+    local cfg = get_entity_config(entity)
+    if not cfg then
+        return
+    end
+
+    local max_slots = get_max_filters(entity)
     if max_slots == 0 then
         return
     end
@@ -637,11 +812,15 @@ local function process_enabled_entity(entity)
 
     -- clear filters if strongest comparator signals are tied
     if conflict then
-        apply_inserter_filters(entity, filters)
+        apply_entity_filters(entity, filters)
         return
     end
 
     -- Build desired filters in sorted order
+    if not cfg.allow_item_quality then
+        items = {}
+    end
+
     if #items > 0 and qualities[1] then
         local slot = 1
         for _, q in ipairs(qualities) do
@@ -661,6 +840,9 @@ local function process_enabled_entity(entity)
             end
         end
     else
+        if not cfg.allow_quality_only then
+            return
+        end
         for i, entry in ipairs(qualities) do
             filters[i] = {
                 quality = entry.quality,
@@ -669,7 +851,7 @@ local function process_enabled_entity(entity)
         end
     end
 
-    apply_inserter_filters(entity, filters)
+    apply_entity_filters(entity, filters)
 end
 
 -- loop through enabled entities in batches
@@ -692,7 +874,7 @@ script.on_event(defines.events.on_tick, function()
 
         if unit and s.enabled_by_unit[unit] then
             local entity = game.get_entity_by_unit_number(unit)
-            if entity and entity.valid and entity.type == "inserter" then
+            if is_supported_entity(entity) then
                 process_enabled_entity(entity)
             else
                 s.enabled_by_unit[unit] = nil -- remove stale entry
