@@ -17,7 +17,7 @@ end
 local function state()
     storage.quality_filter_control = storage.quality_filter_control or {}
     local s = storage.quality_filter_control
-    s.enabled_by_unit = s.enabled_by_unit or {} -- [unit_number] = true/nil
+    s.enabled_by_unit = s.enabled_by_unit or {} -- [unit_number] = LuaEntity/nil
     s.open_entity_by_player = s.open_entity_by_player or {} -- [player_index] = LuaEntity (supported entity or ghost)
     s.recent_replace_by_pos = s.recent_replace_by_pos or {} -- [pos_key] = { enabled=bool, tick=uint } - used for fast-replace
 
@@ -200,14 +200,14 @@ local function set_enabled(entity, enabled)
     end
 
     local unit = entity.unit_number
-    local was_enabled = (s.enabled_by_unit[unit] == true)
+    local was_enabled = (s.enabled_by_unit[unit] ~= nil)
     local now_enabled = (enabled == true)
 
     if now_enabled then
         if not was_enabled then
             table.insert(s.enabled_unit_array, unit)
         end
-        s.enabled_by_unit[unit] = true
+        s.enabled_by_unit[unit] = entity
         if cfg.ensure_settings then
             cfg.ensure_settings(entity)
         end
@@ -227,7 +227,7 @@ local function get_enabled(entity)
         return false
     end
 
-    return s.enabled_by_unit[entity.unit_number] == true
+    return s.enabled_by_unit[entity.unit_number] == entity
 end
 
 local function get_checkbox(player)
@@ -303,12 +303,50 @@ local function destroy_gui_for_all_players()
     end
 end
 
+local function migrate_enabled_entity_references(s)
+    local has_legacy_entries = false
+    for _, value in pairs(s.enabled_by_unit) do
+        if type(value) == "boolean" then
+            has_legacy_entries = true
+            break
+        end
+    end
+
+    if not has_legacy_entries then
+        return
+    end
+
+    -- Versions before 0.4.0 only stored each enabled entity's unit-number key.
+    -- Replace those booleans with LuaEntity references.
+    for _, surface in pairs(game.surfaces) do
+        local entities = surface.find_entities_filtered {
+            type = {"inserter", "splitter"}
+        }
+        for _, entity in pairs(entities) do
+            local unit = entity.unit_number
+            if unit and s.enabled_by_unit[unit] == true and is_supported_entity(entity) then
+                s.enabled_by_unit[unit] = entity
+            end
+        end
+    end
+
+    for unit, value in pairs(s.enabled_by_unit) do
+        if type(value) == "boolean" then
+            s.enabled_by_unit[unit] = nil
+        end
+    end
+end
+
 local function rebuild_enabled_unit_array(s)
     local before_length = #(s.enabled_unit_array or {})
 
     local array = {}
-    for unit, _ in pairs(s.enabled_by_unit) do
-        table.insert(array, unit)
+    for unit, entity in pairs(s.enabled_by_unit) do
+        if entity ~= true and entity ~= false and is_supported_entity(entity) and entity.unit_number == unit then
+            table.insert(array, unit)
+        else
+            s.enabled_by_unit[unit] = nil
+        end
     end
     s.enabled_unit_array = array
 
@@ -341,6 +379,7 @@ script.on_configuration_changed(function()
     local s = state()
     s.open_entity_by_player = {}
     destroy_gui_for_all_players()
+    migrate_enabled_entity_references(s)
     rebuild_enabled_unit_array(s)
 end)
 
@@ -427,7 +466,9 @@ local function cleanup_entity(entity)
         return
     end
     local s = state()
-    s.enabled_by_unit[entity.unit_number] = nil
+    if s.enabled_by_unit[entity.unit_number] == entity then
+        s.enabled_by_unit[entity.unit_number] = nil
+    end
 end
 
 local function pos_key(entity)
@@ -875,9 +916,9 @@ script.on_event(defines.events.on_tick, function()
         local unit = list[s.enabled_index]
         s.enabled_index = s.enabled_index + 1
 
-        if unit and s.enabled_by_unit[unit] then
-            local entity = game.get_entity_by_unit_number(unit)
-            if is_supported_entity(entity) then
+        if unit then
+            local entity = s.enabled_by_unit[unit]
+            if entity ~= true and entity ~= false and is_supported_entity(entity) and entity.unit_number == unit then
                 process_enabled_entity(entity)
             else
                 s.enabled_by_unit[unit] = nil -- remove stale entry

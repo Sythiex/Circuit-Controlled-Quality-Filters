@@ -4,6 +4,7 @@ Date: 2026.07.27
   Changes:
     - Updated for 2.1
   Bugfixes:
+    - Fixed this mod not working with some modded inserters and splitters
     - Fixed the batch size setting not being restored when loading saves or joining multiplayer games
 ---------------------------------------------------------------------------------------------------
 Version: 0.3.0

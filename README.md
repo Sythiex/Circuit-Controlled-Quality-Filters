@@ -28,4 +28,3 @@ You can also set filters for specific items (instead of generic quality-only fil
 ## Known Issues/Limitations:
 - The vanilla circuit-controlled "Set filters" option doesn't support generic quality filters, so it is disabled while this mod's setting is active. When "Set filters with quality signals" is enabled, this mod takes control of the  filter settings ("Use filters" ON, "Whitelist", "Set filters" OFF).
 - Removing an entity with "Set filters with quality signals" enabled then restoring it with the Undo action does not keep its setting.
-- Some modded entities have the "Set filters with quality signals" option but don't currently function
