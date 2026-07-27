@@ -4,12 +4,13 @@ local TAG_KEY = "quality_control_set_filters"
 local QUALITY_PROXY_PREFIX = "ccqf-quality-"
 local FAST_REPLACE_WINDOW_TICKS = 6
 
-local BATCH_SIZE = 50
+local DEFAULT_BATCH_SIZE = 100
+local BATCH_SIZE = DEFAULT_BATCH_SIZE
 
 -- updates BATCH_SIZE from the map mod setting
 local function update_batch_size()
     local s = settings.global["ccqf-batch-size"]
-    local v = (s and s.value) or 50
+    local v = (s and s.value) or DEFAULT_BATCH_SIZE
     BATCH_SIZE = v
 end
 
@@ -332,6 +333,8 @@ script.on_init(function()
     destroy_gui_for_all_players()
     rebuild_enabled_unit_array(s)
 end)
+
+script.on_load(update_batch_size)
 
 script.on_configuration_changed(function()
     update_batch_size()

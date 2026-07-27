@@ -1,4 +1,11 @@
 ---------------------------------------------------------------------------------------------------
+Version: 0.4.0
+Date: 2026.07.27
+  Changes:
+    - Updated for 2.1
+  Bugfixes:
+    - Fixed the batch size setting not being restored when loading saves or joining multiplayer games
+---------------------------------------------------------------------------------------------------
 Version: 0.3.0
 Date: 2026.02.24
   Features:
