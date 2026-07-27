@@ -844,6 +844,20 @@ local function extract_comparator_signal(signals)
     return best, false
 end
 
+local COMPARATOR_ALIASES = {
+    ["≥"] = ">=",
+    ["≤"] = "<=",
+    ["≠"] = "!="
+}
+
+-- Factorio accepts ASCII comparator aliases but returns their symbol forms when filters are read back.
+local function normalize_comparator(comparator)
+    if comparator == nil then
+        return nil
+    end
+    return COMPARATOR_ALIASES[comparator] or comparator
+end
+
 local function are_filters_equal(a, b)
     if a == nil and b == nil then
         return true
@@ -855,7 +869,9 @@ local function are_filters_equal(a, b)
         return a == b
     end
     -- ItemFilter table: name/quality/comparator
-    return a.name == b.name and a.quality == b.quality and a.comparator == b.comparator
+    return a.name == b.name
+        and a.quality == b.quality
+        and normalize_comparator(a.comparator) == normalize_comparator(b.comparator)
 end
 
 -- desired_filters: array of ItemFilter (or nil)
