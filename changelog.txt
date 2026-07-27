@@ -6,6 +6,8 @@ Date: 2026.07.27
   Bugfixes:
     - Fixed this mod not working with some modded inserters and splitters
     - Fixed the batch size setting not being restored when loading saves or joining multiplayer games
+    - Fixed "Set filters with quality signals" not being saved to blueprints in the blueprint library or copied when pasting blueprint settings
+    - Fixed "Set filters with quality signals" not being retained during fast replacement on space platforms
 ---------------------------------------------------------------------------------------------------
 Version: 0.3.0
 Date: 2026.02.24

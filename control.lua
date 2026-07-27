@@ -476,7 +476,13 @@ local function pos_key(entity)
     return string.format("%d:%d:%.3f:%.3f", entity.surface.index, entity.force.index, pos.x, pos.y)
 end
 
-local destroy_events = {defines.events.on_player_mined_entity, defines.events.on_robot_mined_entity, defines.events.on_entity_died, defines.events.script_raised_destroy}
+local destroy_events = {
+    defines.events.on_player_mined_entity,
+    defines.events.on_robot_mined_entity,
+    defines.events.on_space_platform_mined_entity,
+    defines.events.on_entity_died,
+    defines.events.script_raised_destroy
+}
 
 script.on_event(destroy_events, function(e)
     local entity = e.entity
@@ -557,8 +563,55 @@ script.on_event(copy_events, function(e)
     sync_checkbox_for_entity(destination)
 end)
 
-local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_lazy)
-    if not (blueprint_stack and blueprint_stack.valid_for_read and blueprint_stack.is_blueprint) then
+script.on_event(defines.events.on_blueprint_settings_pasted, function(e)
+    local entity = e.entity
+    if not is_supported_or_ghost(entity) then
+        return
+    end
+
+    local tags = e.tags
+    if entity.type == "entity-ghost" then
+        tags = entity.tags
+    end
+
+    set_enabled(entity, tags and tags[TAG_KEY] == true)
+    sync_checkbox_for_entity(entity)
+end)
+
+local function is_blueprint_target(blueprint)
+    if not (blueprint and blueprint.valid) then
+        return false
+    end
+
+    if blueprint.object_name == "LuaItemStack" then
+        return blueprint.valid_for_read and blueprint.is_blueprint
+    end
+
+    if blueprint.object_name == "LuaRecord" then
+        return blueprint.type == "blueprint" and blueprint.is_blueprint_setup()
+    end
+
+    return false
+end
+
+local function get_blueprint_target(e, player)
+    if is_blueprint_target(e.stack) then
+        return e.stack
+    end
+    if is_blueprint_target(e.record) then
+        return e.record
+    end
+    if is_blueprint_target(player.cursor_stack) then
+        return player.cursor_stack
+    end
+    if is_blueprint_target(player.cursor_record) then
+        return player.cursor_record
+    end
+    return nil
+end
+
+local function stamp_tags_to_blueprint(blueprint, mapping_lazy)
+    if not is_blueprint_target(blueprint) then
         return
     end
     if not (mapping_lazy and mapping_lazy.valid) then
@@ -570,7 +623,7 @@ local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_la
         return
     end
 
-    local entities = blueprint_stack.get_blueprint_entities()
+    local entities = blueprint.get_blueprint_entities()
     if not entities then
         return
     end
@@ -578,7 +631,7 @@ local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_la
     for _, be in ipairs(entities) do
         local source = mapping[be.entity_number]
         if source and source.valid and is_supported_or_ghost(source) then
-            blueprint_stack.set_blueprint_entity_tag(be.entity_number, TAG_KEY, get_enabled(source) and true or nil)
+            blueprint.set_blueprint_entity_tag(be.entity_number, TAG_KEY, get_enabled(source) and true or nil)
         end
     end
 end
@@ -589,15 +642,12 @@ script.on_event(defines.events.on_player_setup_blueprint, function(e)
         return
     end
 
-    local bp = e.stack
-    if not (bp and bp.valid_for_read and bp.is_blueprint) then
-        bp = player.cursor_stack
-    end
-    if not (bp and bp.valid_for_read and bp.is_blueprint) then
+    local blueprint = get_blueprint_target(e, player)
+    if not blueprint then
         return
     end
 
-    stamp_tags_to_blueprint(e.player_index, bp, e.mapping)
+    stamp_tags_to_blueprint(blueprint, e.mapping)
 end)
 
 local function read_signal(entity, signal_id)
