@@ -705,7 +705,7 @@ end
 -- Input: array of { signal = SignalID, count = int }
 -- Returns: array of { quality = QualityID, value = int, level = int }
 local function extract_quality_signals_sorted(combined_signals)
-    local present = {}
+    local by_quality = {}
 
     for _, s in ipairs(combined_signals or {}) do
         local id = s.signal
@@ -722,14 +722,24 @@ local function extract_quality_signals_sorted(combined_signals)
             if qname then
                 local q = prototypes.quality[qname]
                 if q then
-                    present[#present + 1] = {
-                        quality = qname,
-                        value = c,
-                        level = q.level or 0
-                    }
+                    local entry = by_quality[qname]
+                    if entry then
+                        entry.value = math.max(entry.value, c)
+                    else
+                        by_quality[qname] = {
+                            quality = qname,
+                            value = c,
+                            level = q.level or 0
+                        }
+                    end
                 end
             end
         end
+    end
+
+    local present = {}
+    for _, entry in pairs(by_quality) do
+        present[#present + 1] = entry
     end
 
     -- sort: signal count desc, then quality tier desc, then name
