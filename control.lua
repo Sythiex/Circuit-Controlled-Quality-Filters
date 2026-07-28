@@ -292,7 +292,7 @@ local function ensure_gui(player, entity)
     frame.add {
         type = "checkbox",
         name = CHECKBOX_NAME,
-        caption = {"", "Set filters with quality signals"},
+        caption = {"gui.ccqf-set-filters-with-quality-signals"},
         state = false
     }
 end
