@@ -4,6 +4,18 @@ local TAG_KEY = "quality_control_set_filters"
 local QUALITY_PROXY_PREFIX = "ccqf-quality-"
 local FAST_REPLACE_WINDOW_TICKS = 6
 
+local SUPPORTED_ENTITY_EVENT_FILTERS = {
+    {filter = "type", type = "inserter"},
+    {filter = "type", type = "splitter"}
+}
+
+local SUPPORTED_OR_GHOST_EVENT_FILTERS = {
+    {filter = "type", type = "inserter"},
+    {filter = "type", type = "splitter"},
+    {filter = "ghost_type", type = "inserter"},
+    {filter = "ghost_type", type = "splitter"}
+}
+
 local DEFAULT_BATCH_SIZE = 100
 local BATCH_SIZE = DEFAULT_BATCH_SIZE
 
@@ -466,6 +478,12 @@ local function pos_key(entity)
     return string.format("%d:%d:%.3f:%.3f", entity.surface.index, entity.force.index, pos.x, pos.y)
 end
 
+local function register_filtered_events(events, handler, filters)
+    for _, event in ipairs(events) do
+        script.on_event(event, handler, filters)
+    end
+end
+
 local destroy_events = {
     defines.events.on_player_mined_entity,
     defines.events.on_robot_mined_entity,
@@ -474,7 +492,7 @@ local destroy_events = {
     defines.events.script_raised_destroy
 }
 
-script.on_event(destroy_events, function(e)
+local function on_entity_removed(e)
     local entity = e.entity
     if is_supported_entity(entity) then
         if get_enabled(entity) then
@@ -487,13 +505,19 @@ script.on_event(destroy_events, function(e)
     end
 
     cleanup_entity(entity)
-end)
+end
+
+register_filtered_events(destroy_events, on_entity_removed, SUPPORTED_ENTITY_EVENT_FILTERS)
 
 local build_events = {
-    defines.events.on_built_entity, defines.events.on_robot_built_entity, defines.events.on_space_platform_built_entity, defines.events.script_raised_built, defines.events.script_raised_revive
+    defines.events.on_built_entity,
+    defines.events.on_robot_built_entity,
+    defines.events.on_space_platform_built_entity,
+    defines.events.script_raised_built,
+    defines.events.script_raised_revive
 }
 
-script.on_event(build_events, function(e)
+local function on_entity_built(e)
     local entity = e.entity
     if not is_supported_entity(entity) then
         return
@@ -515,7 +539,9 @@ script.on_event(build_events, function(e)
         set_enabled(entity, rec.enabled)
         s.recent_replace_by_pos[key] = nil
     end
-end)
+end
+
+register_filtered_events(build_events, on_entity_built, SUPPORTED_ENTITY_EVENT_FILTERS)
 
 -- If the player has the same entity open, update the checkbox state
 local function sync_checkbox_for_entity(changed_entity)
@@ -538,9 +564,7 @@ local function sync_checkbox_for_entity(changed_entity)
     end
 end
 
-local copy_events = {defines.events.on_entity_settings_pasted, defines.events.on_entity_cloned}
-
-script.on_event(copy_events, function(e)
+local function on_entity_copied(e)
     local source = e.source
     local destination = e.destination
 
@@ -551,7 +575,10 @@ script.on_event(copy_events, function(e)
     local enabled = get_enabled(source)
     set_enabled(destination, enabled)
     sync_checkbox_for_entity(destination)
-end)
+end
+
+script.on_event(defines.events.on_entity_settings_pasted, on_entity_copied)
+script.on_event(defines.events.on_entity_cloned, on_entity_copied, SUPPORTED_OR_GHOST_EVENT_FILTERS)
 
 script.on_event(defines.events.on_blueprint_settings_pasted, function(e)
     local entity = e.entity
