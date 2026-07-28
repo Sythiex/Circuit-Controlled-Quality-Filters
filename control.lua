@@ -668,49 +668,10 @@ script.on_event(defines.events.on_player_setup_blueprint, function(e)
 end)
 
 local function gather_signals(entity)
-    local totals = {} -- key -> { signal = SignalID, count = int }
-
-    -- Create keys to merge identical signals
-    local function key_for(id)
-        local k = tostring(id.type) .. ":" .. tostring(id.name)
-        if id.quality ~= nil then
-            k = k .. ":" .. tostring(id.quality)
-        end
-        return k
-    end
-
-    local function add_from(connector_id)
-        local signals = entity.get_signals(connector_id)
-        if not signals then
-            return
-        end
-
-        for _, s in ipairs(signals) do
-            local id = s.signal
-            local c = s.count or 0
-            if id and c > 0 then
-                local k = key_for(id)
-                local existing = totals[k]
-                if existing then
-                    existing.count = existing.count + c
-                else
-                    totals[k] = {
-                        signal = id,
-                        count = c
-                    }
-                end
-            end
-        end
-    end
-
-    add_from(defines.wire_connector_id.circuit_red)
-    add_from(defines.wire_connector_id.circuit_green)
-
-    local combined = {} -- { signal = SignalID, count = int }
-    for _, v in pairs(totals) do
-        combined[#combined + 1] = v
-    end
-    return combined
+    return entity.get_signals(
+        defines.wire_connector_id.circuit_red,
+        defines.wire_connector_id.circuit_green
+    ) or {}
 end
 
 -- Filter/sort quality signals out of a combined signal list
@@ -722,7 +683,7 @@ local function extract_quality_signals_sorted(combined_signals)
     for _, s in ipairs(combined_signals or {}) do
         local id = s.signal
         local c = s.count or 0
-        if id and c > 0 then
+        if id then
             -- Support both real quality signals (type="quality") and generated proxy signals
             local qname = nil
             if id.type == "quality" then
@@ -736,7 +697,7 @@ local function extract_quality_signals_sorted(combined_signals)
                 if q then
                     local entry = by_quality[qname]
                     if entry then
-                        entry.value = math.max(entry.value, c)
+                        entry.value = entry.value + c
                     else
                         by_quality[qname] = {
                             quality = qname,
@@ -751,7 +712,9 @@ local function extract_quality_signals_sorted(combined_signals)
 
     local present = {}
     for _, entry in pairs(by_quality) do
-        present[#present + 1] = entry
+        if entry.value > 0 then
+            present[#present + 1] = entry
+        end
     end
 
     -- sort: signal count desc, then quality tier desc, then name
@@ -787,7 +750,7 @@ local function extract_item_signals_sorted(combined_signals)
     for _, s in ipairs(combined_signals or {}) do
         local id = s.signal
         local c = s.count or 0
-        if is_item_signal(id) and c > 0 then
+        if c > 0 and is_item_signal(id) then
             local entry = by_name[id.name]
             if entry then
                 entry.value = entry.value + c
@@ -841,7 +804,7 @@ local function extract_comparator_signal(signals)
     for _, s in ipairs(signals or {}) do
         local id = s.signal
         local c = s.count or 0
-        if id and id.type == "virtual" and c > 0 then
+        if c > 0 and id and id.type == "virtual" then
             local comparator = MAP[id.name]
             if comparator then
                 if c > best_count then
