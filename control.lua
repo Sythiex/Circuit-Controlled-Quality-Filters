@@ -199,7 +199,6 @@ local LOADER_CONFIG = {
     set_filter = function(entity, index, value)
         entity.set_filter(index, value)
     end,
-    is_compatible = has_circuit_connector,
     adjust_filters = adjust_loader_filters,
     allow_quality_only = true,
     allow_item_quality = true
@@ -254,7 +253,7 @@ local function is_supported_entity(entity)
         return false
     end
 
-    if cfg.is_compatible and not cfg.is_compatible(entity) then
+    if not has_circuit_connector(entity) then
         return false
     end
 
@@ -274,7 +273,7 @@ local function is_supported_or_ghost(entity)
         if get_max_filters(entity) == 0 then
             return false
         end
-        return not cfg.is_compatible or cfg.is_compatible(entity)
+        return has_circuit_connector(entity)
     end
 
     return is_supported_entity(entity)
