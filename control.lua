@@ -29,12 +29,6 @@ local function state()
     return s
 end
 
-local function debug_print(msg)
-    for _, p in pairs(game.players) do
-        p.print(msg)
-    end
-end
-
 local function get_entity_type(entity)
     if not (entity and entity.valid) then
         return nil
@@ -338,8 +332,6 @@ local function migrate_enabled_entity_references(s)
 end
 
 local function rebuild_enabled_unit_array(s)
-    local before_length = #(s.enabled_unit_array or {})
-
     local array = {}
     for unit, entity in pairs(s.enabled_by_unit) do
         if entity ~= true and entity ~= false and is_supported_entity(entity) and entity.unit_number == unit then
@@ -354,14 +346,6 @@ local function rebuild_enabled_unit_array(s)
     if after_length == 0 or s.enabled_index > after_length then
         s.enabled_index = 1
     end
-
-    -- debug_print(("rebuild_enabled_unit_array: before_length=%d after_length=%d enabled_by_unit=%d tick=%d"):format(before_length, after_length, (function()
-    --     local c = 0
-    --     for _ in pairs(s.enabled_by_unit) do
-    --         c = c + 1
-    --     end
-    --     return c
-    -- end)(), game.tick))
 end
 
 script.on_init(function()
@@ -410,6 +394,12 @@ script.on_event(defines.events.on_player_created, function(e)
     if player then
         destroy_gui(player)
     end
+end)
+
+script.on_event(defines.events.on_player_removed, function(e)
+    local s = state()
+    s.open_entity_by_player[e.player_index] = nil
+    s.gui_type_by_player[e.player_index] = nil
 end)
 
 -- Whenever a supported entity GUI is opened, save which entity it is and sync checkbox from storage
@@ -649,11 +639,6 @@ script.on_event(defines.events.on_player_setup_blueprint, function(e)
 
     stamp_tags_to_blueprint(blueprint, e.mapping)
 end)
-
-local function read_signal(entity, signal_id)
-    local signal = entity.get_signal(signal_id, defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green)
-    return signal or 0
-end
 
 local function gather_signals(entity)
     local totals = {} -- key -> { signal = SignalID, count = int }
