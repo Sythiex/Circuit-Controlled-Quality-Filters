@@ -4,19 +4,35 @@ local TAG_KEY = "quality_control_set_filters"
 local QUALITY_PROXY_PREFIX = "ccqf-quality-"
 local FAST_REPLACE_WINDOW_TICKS = 6
 
-local BATCH_SIZE = 50
+local SUPPORTED_ENTITY_TYPES = {
+    "inserter",
+    "splitter",
+    "loader",
+    "loader-1x1"
+}
+
+local SUPPORTED_ENTITY_EVENT_FILTERS = {}
+local SUPPORTED_OR_GHOST_EVENT_FILTERS = {}
+for _, entity_type in ipairs(SUPPORTED_ENTITY_TYPES) do
+    table.insert(SUPPORTED_ENTITY_EVENT_FILTERS, {filter = "type", type = entity_type})
+    table.insert(SUPPORTED_OR_GHOST_EVENT_FILTERS, {filter = "type", type = entity_type})
+    table.insert(SUPPORTED_OR_GHOST_EVENT_FILTERS, {filter = "ghost_type", type = entity_type})
+end
+
+local DEFAULT_BATCH_SIZE = 100
+local BATCH_SIZE = DEFAULT_BATCH_SIZE
 
 -- updates BATCH_SIZE from the map mod setting
 local function update_batch_size()
     local s = settings.global["ccqf-batch-size"]
-    local v = (s and s.value) or 50
+    local v = (s and s.value) or DEFAULT_BATCH_SIZE
     BATCH_SIZE = v
 end
 
 local function state()
     storage.quality_filter_control = storage.quality_filter_control or {}
     local s = storage.quality_filter_control
-    s.enabled_by_unit = s.enabled_by_unit or {} -- [unit_number] = true/nil
+    s.enabled_by_unit = s.enabled_by_unit or {} -- [unit_number] = LuaEntity/nil
     s.open_entity_by_player = s.open_entity_by_player or {} -- [player_index] = LuaEntity (supported entity or ghost)
     s.recent_replace_by_pos = s.recent_replace_by_pos or {} -- [pos_key] = { enabled=bool, tick=uint } - used for fast-replace
 
@@ -28,12 +44,6 @@ local function state()
     return s
 end
 
-local function debug_print(msg)
-    for _, p in pairs(game.players) do
-        p.print(msg)
-    end
-end
-
 local function get_entity_type(entity)
     if not (entity and entity.valid) then
         return nil
@@ -42,6 +52,21 @@ local function get_entity_type(entity)
         return entity.ghost_type
     end
     return entity.type
+end
+
+local function get_entity_prototype(entity)
+    if not (entity and entity.valid) then
+        return nil
+    end
+    if entity.type == "entity-ghost" then
+        return entity.ghost_prototype
+    end
+    return entity.prototype
+end
+
+local function has_circuit_connector(entity)
+    local prototype = get_entity_prototype(entity)
+    return prototype and prototype.get_max_circuit_wire_distance() > 0 or false
 end
 
 -- Turns off "Set filters" from circuit network, turns on "Use filters", turns on "Whitelist" for inserters
@@ -81,13 +106,58 @@ local function ensure_correct_filter_settings_splitter(entity)
 
 end
 
+-- Turns off "Set filters" from circuit network and enables whitelist filtering for loaders
+local function ensure_correct_filter_settings_loader(entity)
+    if not (entity and entity.valid and (entity.type == "loader" or entity.type == "loader-1x1")) then
+        return
+    end
+
+    if (entity.filter_slot_count or 0) == 0 then
+        return
+    end
+
+    local control_behavior = entity.get_control_behavior()
+    if control_behavior and control_behavior.valid and control_behavior.circuit_set_filters then
+        control_behavior.circuit_set_filters = false
+    end
+
+    if entity.loader_filter_mode ~= "whitelist" then
+        entity.loader_filter_mode = "whitelist"
+    end
+end
+
+local function get_filter_slot_count(entity)
+    if not (entity and entity.valid) then
+        return 0
+    end
+
+    if entity.type == "entity-ghost" then
+        local prototype = entity.ghost_prototype
+        return (prototype and prototype.filter_count) or 0
+    end
+
+    return entity.filter_slot_count or 0
+end
+
+-- Mirror a single filter so per-lane loaders apply it to both lanes
+local function adjust_loader_filters(entity, filters)
+    local prototype = get_entity_prototype(entity)
+    if prototype and prototype.per_lane_filters and filters[1] and not filters[2] then
+        local first = filters[1]
+        filters[2] = {
+            name = first.name,
+            quality = first.quality,
+            comparator = first.comparator
+        }
+    end
+    return filters
+end
+
 local ENTITY_CONFIG = {
     inserter = {
         gui = defines.relative_gui_type.inserter_gui,
         ensure_settings = ensure_correct_filter_settings_inserter,
-        get_max_filters = function(entity)
-            return entity.filter_slot_count or 0
-        end,
+        get_max_filters = get_filter_slot_count,
         get_filter = function(entity, index)
             return entity.get_filter(index)
         end,
@@ -118,6 +188,24 @@ local ENTITY_CONFIG = {
         allow_item_quality = true
     }
 }
+
+local LOADER_CONFIG = {
+    gui = defines.relative_gui_type.loader_gui,
+    ensure_settings = ensure_correct_filter_settings_loader,
+    get_max_filters = get_filter_slot_count,
+    get_filter = function(entity, index)
+        return entity.get_filter(index)
+    end,
+    set_filter = function(entity, index, value)
+        entity.set_filter(index, value)
+    end,
+    adjust_filters = adjust_loader_filters,
+    allow_quality_only = true,
+    allow_item_quality = true
+}
+
+ENTITY_CONFIG.loader = LOADER_CONFIG
+ENTITY_CONFIG["loader-1x1"] = LOADER_CONFIG
 
 local function get_entity_config(entity)
     local entity_type = get_entity_type(entity)
@@ -156,11 +244,16 @@ local function is_supported_entity(entity)
         return false
     end
 
-    if not get_entity_config(entity) then
+    local cfg = get_entity_config(entity)
+    if not cfg then
         return false
     end
 
     if get_max_filters(entity) == 0 then
+        return false
+    end
+
+    if not has_circuit_connector(entity) then
         return false
     end
 
@@ -173,7 +266,14 @@ local function is_supported_or_ghost(entity)
     end
 
     if entity.type == "entity-ghost" then
-        return ENTITY_CONFIG[entity.ghost_type] ~= nil
+        local cfg = get_entity_config(entity)
+        if not cfg then
+            return false
+        end
+        if get_max_filters(entity) == 0 then
+            return false
+        end
+        return has_circuit_connector(entity)
     end
 
     return is_supported_entity(entity)
@@ -199,14 +299,14 @@ local function set_enabled(entity, enabled)
     end
 
     local unit = entity.unit_number
-    local was_enabled = (s.enabled_by_unit[unit] == true)
+    local was_enabled = (s.enabled_by_unit[unit] ~= nil)
     local now_enabled = (enabled == true)
 
     if now_enabled then
         if not was_enabled then
             table.insert(s.enabled_unit_array, unit)
         end
-        s.enabled_by_unit[unit] = true
+        s.enabled_by_unit[unit] = entity
         if cfg.ensure_settings then
             cfg.ensure_settings(entity)
         end
@@ -226,7 +326,7 @@ local function get_enabled(entity)
         return false
     end
 
-    return s.enabled_by_unit[entity.unit_number] == true
+    return s.enabled_by_unit[entity.unit_number] == entity
 end
 
 local function get_checkbox(player)
@@ -257,6 +357,11 @@ end
 -- create the setting gui for the player if needed
 local function ensure_gui(player, entity)
     local relative = player.gui.relative
+
+    if not is_supported_or_ghost(entity) then
+        destroy_gui(player)
+        return
+    end
 
     local cfg = get_entity_config(entity)
     if not cfg then
@@ -291,7 +396,7 @@ local function ensure_gui(player, entity)
     frame.add {
         type = "checkbox",
         name = CHECKBOX_NAME,
-        caption = {"", "Set filters with quality signals"},
+        caption = {"gui.ccqf-set-filters-with-quality-signals"},
         state = false
     }
 end
@@ -302,12 +407,48 @@ local function destroy_gui_for_all_players()
     end
 end
 
-local function rebuild_enabled_unit_array(s)
-    local before_length = #(s.enabled_unit_array or {})
+local function migrate_enabled_entity_references(s)
+    local has_legacy_entries = false
+    for _, value in pairs(s.enabled_by_unit) do
+        if type(value) == "boolean" then
+            has_legacy_entries = true
+            break
+        end
+    end
 
+    if not has_legacy_entries then
+        return
+    end
+
+    -- Versions before 0.4.0 only stored each enabled entity's unit-number key.
+    -- Replace those booleans with LuaEntity references.
+    for _, surface in pairs(game.surfaces) do
+        local entities = surface.find_entities_filtered {
+            type = SUPPORTED_ENTITY_TYPES
+        }
+        for _, entity in pairs(entities) do
+            local unit = entity.unit_number
+            if unit and s.enabled_by_unit[unit] == true and is_supported_entity(entity) then
+                s.enabled_by_unit[unit] = entity
+            end
+        end
+    end
+
+    for unit, value in pairs(s.enabled_by_unit) do
+        if type(value) == "boolean" then
+            s.enabled_by_unit[unit] = nil
+        end
+    end
+end
+
+local function rebuild_enabled_unit_array(s)
     local array = {}
-    for unit, _ in pairs(s.enabled_by_unit) do
-        table.insert(array, unit)
+    for unit, entity in pairs(s.enabled_by_unit) do
+        if entity ~= true and entity ~= false and is_supported_entity(entity) and entity.unit_number == unit then
+            table.insert(array, unit)
+        else
+            s.enabled_by_unit[unit] = nil
+        end
     end
     s.enabled_unit_array = array
 
@@ -315,14 +456,6 @@ local function rebuild_enabled_unit_array(s)
     if after_length == 0 or s.enabled_index > after_length then
         s.enabled_index = 1
     end
-
-    -- debug_print(("rebuild_enabled_unit_array: before_length=%d after_length=%d enabled_by_unit=%d tick=%d"):format(before_length, after_length, (function()
-    --     local c = 0
-    --     for _ in pairs(s.enabled_by_unit) do
-    --         c = c + 1
-    --     end
-    --     return c
-    -- end)(), game.tick))
 end
 
 script.on_init(function()
@@ -333,11 +466,14 @@ script.on_init(function()
     rebuild_enabled_unit_array(s)
 end)
 
+script.on_load(update_batch_size)
+
 script.on_configuration_changed(function()
     update_batch_size()
     local s = state()
     s.open_entity_by_player = {}
     destroy_gui_for_all_players()
+    migrate_enabled_entity_references(s)
     rebuild_enabled_unit_array(s)
 end)
 
@@ -368,6 +504,12 @@ script.on_event(defines.events.on_player_created, function(e)
     if player then
         destroy_gui(player)
     end
+end)
+
+script.on_event(defines.events.on_player_removed, function(e)
+    local s = state()
+    s.open_entity_by_player[e.player_index] = nil
+    s.gui_type_by_player[e.player_index] = nil
 end)
 
 -- Whenever a supported entity GUI is opened, save which entity it is and sync checkbox from storage
@@ -424,7 +566,9 @@ local function cleanup_entity(entity)
         return
     end
     local s = state()
-    s.enabled_by_unit[entity.unit_number] = nil
+    if s.enabled_by_unit[entity.unit_number] == entity then
+        s.enabled_by_unit[entity.unit_number] = nil
+    end
 end
 
 local function pos_key(entity)
@@ -432,9 +576,21 @@ local function pos_key(entity)
     return string.format("%d:%d:%.3f:%.3f", entity.surface.index, entity.force.index, pos.x, pos.y)
 end
 
-local destroy_events = {defines.events.on_player_mined_entity, defines.events.on_robot_mined_entity, defines.events.on_entity_died, defines.events.script_raised_destroy}
+local function register_filtered_events(events, handler, filters)
+    for _, event in ipairs(events) do
+        script.on_event(event, handler, filters)
+    end
+end
 
-script.on_event(destroy_events, function(e)
+local destroy_events = {
+    defines.events.on_player_mined_entity,
+    defines.events.on_robot_mined_entity,
+    defines.events.on_space_platform_mined_entity,
+    defines.events.on_entity_died,
+    defines.events.script_raised_destroy
+}
+
+local function on_entity_removed(e)
     local entity = e.entity
     if is_supported_entity(entity) then
         if get_enabled(entity) then
@@ -447,13 +603,19 @@ script.on_event(destroy_events, function(e)
     end
 
     cleanup_entity(entity)
-end)
+end
+
+register_filtered_events(destroy_events, on_entity_removed, SUPPORTED_ENTITY_EVENT_FILTERS)
 
 local build_events = {
-    defines.events.on_built_entity, defines.events.on_robot_built_entity, defines.events.on_space_platform_built_entity, defines.events.script_raised_built, defines.events.script_raised_revive
+    defines.events.on_built_entity,
+    defines.events.on_robot_built_entity,
+    defines.events.on_space_platform_built_entity,
+    defines.events.script_raised_built,
+    defines.events.script_raised_revive
 }
 
-script.on_event(build_events, function(e)
+local function on_entity_built(e)
     local entity = e.entity
     if not is_supported_entity(entity) then
         return
@@ -475,7 +637,9 @@ script.on_event(build_events, function(e)
         set_enabled(entity, rec.enabled)
         s.recent_replace_by_pos[key] = nil
     end
-end)
+end
+
+register_filtered_events(build_events, on_entity_built, SUPPORTED_ENTITY_EVENT_FILTERS)
 
 -- If the player has the same entity open, update the checkbox state
 local function sync_checkbox_for_entity(changed_entity)
@@ -498,9 +662,7 @@ local function sync_checkbox_for_entity(changed_entity)
     end
 end
 
-local copy_events = {defines.events.on_entity_settings_pasted, defines.events.on_entity_cloned}
-
-script.on_event(copy_events, function(e)
+local function on_entity_copied(e)
     local source = e.source
     local destination = e.destination
 
@@ -511,10 +673,60 @@ script.on_event(copy_events, function(e)
     local enabled = get_enabled(source)
     set_enabled(destination, enabled)
     sync_checkbox_for_entity(destination)
+end
+
+script.on_event(defines.events.on_entity_settings_pasted, on_entity_copied)
+script.on_event(defines.events.on_entity_cloned, on_entity_copied, SUPPORTED_OR_GHOST_EVENT_FILTERS)
+
+script.on_event(defines.events.on_blueprint_settings_pasted, function(e)
+    local entity = e.entity
+    if not is_supported_or_ghost(entity) then
+        return
+    end
+
+    local tags = e.tags
+    if entity.type == "entity-ghost" then
+        tags = entity.tags
+    end
+
+    set_enabled(entity, tags and tags[TAG_KEY] == true)
+    sync_checkbox_for_entity(entity)
 end)
 
-local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_lazy)
-    if not (blueprint_stack and blueprint_stack.valid_for_read and blueprint_stack.is_blueprint) then
+local function is_blueprint_target(blueprint)
+    if not (blueprint and blueprint.valid) then
+        return false
+    end
+
+    if blueprint.object_name == "LuaItemStack" then
+        return blueprint.valid_for_read and blueprint.is_blueprint
+    end
+
+    if blueprint.object_name == "LuaRecord" then
+        return blueprint.type == "blueprint" and blueprint.is_blueprint_setup()
+    end
+
+    return false
+end
+
+local function get_blueprint_target(e, player)
+    if is_blueprint_target(e.stack) then
+        return e.stack
+    end
+    if is_blueprint_target(e.record) then
+        return e.record
+    end
+    if is_blueprint_target(player.cursor_stack) then
+        return player.cursor_stack
+    end
+    if is_blueprint_target(player.cursor_record) then
+        return player.cursor_record
+    end
+    return nil
+end
+
+local function stamp_tags_to_blueprint(blueprint, mapping_lazy)
+    if not is_blueprint_target(blueprint) then
         return
     end
     if not (mapping_lazy and mapping_lazy.valid) then
@@ -526,7 +738,7 @@ local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_la
         return
     end
 
-    local entities = blueprint_stack.get_blueprint_entities()
+    local entities = blueprint.get_blueprint_entities()
     if not entities then
         return
     end
@@ -534,7 +746,7 @@ local function stamp_tags_to_blueprint(player_index, blueprint_stack, mapping_la
     for _, be in ipairs(entities) do
         local source = mapping[be.entity_number]
         if source and source.valid and is_supported_or_ghost(source) then
-            blueprint_stack.set_blueprint_entity_tag(be.entity_number, TAG_KEY, get_enabled(source) and true or nil)
+            blueprint.set_blueprint_entity_tag(be.entity_number, TAG_KEY, get_enabled(source) and true or nil)
         end
     end
 end
@@ -545,78 +757,31 @@ script.on_event(defines.events.on_player_setup_blueprint, function(e)
         return
     end
 
-    local bp = e.stack
-    if not (bp and bp.valid_for_read and bp.is_blueprint) then
-        bp = player.cursor_stack
-    end
-    if not (bp and bp.valid_for_read and bp.is_blueprint) then
+    local blueprint = get_blueprint_target(e, player)
+    if not blueprint then
         return
     end
 
-    stamp_tags_to_blueprint(e.player_index, bp, e.mapping)
+    stamp_tags_to_blueprint(blueprint, e.mapping)
 end)
 
-local function read_signal(entity, signal_id)
-    local signal = entity.get_signal(signal_id, defines.wire_connector_id.circuit_red, defines.wire_connector_id.circuit_green)
-    return signal or 0
-end
-
 local function gather_signals(entity)
-    local totals = {} -- key -> { signal = SignalID, count = int }
-
-    -- Create keys to merge identical signals
-    local function key_for(id)
-        local k = tostring(id.type) .. ":" .. tostring(id.name)
-        if id.quality ~= nil then
-            k = k .. ":" .. tostring(id.quality)
-        end
-        return k
-    end
-
-    local function add_from(connector_id)
-        local signals = entity.get_signals(connector_id)
-        if not signals then
-            return
-        end
-
-        for _, s in ipairs(signals) do
-            local id = s.signal
-            local c = s.count or 0
-            if id and c > 0 then
-                local k = key_for(id)
-                local existing = totals[k]
-                if existing then
-                    existing.count = existing.count + c
-                else
-                    totals[k] = {
-                        signal = id,
-                        count = c
-                    }
-                end
-            end
-        end
-    end
-
-    add_from(defines.wire_connector_id.circuit_red)
-    add_from(defines.wire_connector_id.circuit_green)
-
-    local combined = {} -- { signal = SignalID, count = int }
-    for _, v in pairs(totals) do
-        combined[#combined + 1] = v
-    end
-    return combined
+    return entity.get_signals(
+        defines.wire_connector_id.circuit_red,
+        defines.wire_connector_id.circuit_green
+    ) or {}
 end
 
 -- Filter/sort quality signals out of a combined signal list
 -- Input: array of { signal = SignalID, count = int }
 -- Returns: array of { quality = QualityID, value = int, level = int }
 local function extract_quality_signals_sorted(combined_signals)
-    local present = {}
+    local by_quality = {}
 
     for _, s in ipairs(combined_signals or {}) do
         local id = s.signal
         local c = s.count or 0
-        if id and c > 0 then
+        if id then
             -- Support both real quality signals (type="quality") and generated proxy signals
             local qname = nil
             if id.type == "quality" then
@@ -628,13 +793,25 @@ local function extract_quality_signals_sorted(combined_signals)
             if qname then
                 local q = prototypes.quality[qname]
                 if q then
-                    present[#present + 1] = {
-                        quality = qname,
-                        value = c,
-                        level = q.level or 0
-                    }
+                    local entry = by_quality[qname]
+                    if entry then
+                        entry.value = entry.value + c
+                    else
+                        by_quality[qname] = {
+                            quality = qname,
+                            value = c,
+                            level = q.level or 0
+                        }
+                    end
                 end
             end
+        end
+    end
+
+    local present = {}
+    for _, entry in pairs(by_quality) do
+        if entry.value > 0 then
+            present[#present + 1] = entry
         end
     end
 
@@ -671,7 +848,7 @@ local function extract_item_signals_sorted(combined_signals)
     for _, s in ipairs(combined_signals or {}) do
         local id = s.signal
         local c = s.count or 0
-        if is_item_signal(id) and c > 0 then
+        if c > 0 and is_item_signal(id) then
             local entry = by_name[id.name]
             if entry then
                 entry.value = entry.value + c
@@ -725,7 +902,7 @@ local function extract_comparator_signal(signals)
     for _, s in ipairs(signals or {}) do
         local id = s.signal
         local c = s.count or 0
-        if id and id.type == "virtual" and c > 0 then
+        if c > 0 and id and id.type == "virtual" then
             local comparator = MAP[id.name]
             if comparator then
                 if c > best_count then
@@ -750,6 +927,20 @@ local function extract_comparator_signal(signals)
     return best, false
 end
 
+local COMPARATOR_ALIASES = {
+    ["≥"] = ">=",
+    ["≤"] = "<=",
+    ["≠"] = "!="
+}
+
+-- Factorio accepts ASCII comparator aliases but returns their symbol forms when filters are read back.
+local function normalize_comparator(comparator)
+    if comparator == nil then
+        return nil
+    end
+    return COMPARATOR_ALIASES[comparator] or comparator
+end
+
 local function are_filters_equal(a, b)
     if a == nil and b == nil then
         return true
@@ -761,7 +952,9 @@ local function are_filters_equal(a, b)
         return a == b
     end
     -- ItemFilter table: name/quality/comparator
-    return a.name == b.name and a.quality == b.quality and a.comparator == b.comparator
+    return a.name == b.name
+        and a.quality == b.quality
+        and normalize_comparator(a.comparator) == normalize_comparator(b.comparator)
 end
 
 -- desired_filters: array of ItemFilter (or nil)
@@ -851,6 +1044,10 @@ local function process_enabled_entity(entity)
         end
     end
 
+    if cfg.adjust_filters then
+        filters = cfg.adjust_filters(entity, filters)
+    end
+
     apply_entity_filters(entity, filters)
 end
 
@@ -872,9 +1069,9 @@ script.on_event(defines.events.on_tick, function()
         local unit = list[s.enabled_index]
         s.enabled_index = s.enabled_index + 1
 
-        if unit and s.enabled_by_unit[unit] then
-            local entity = game.get_entity_by_unit_number(unit)
-            if is_supported_entity(entity) then
+        if unit then
+            local entity = s.enabled_by_unit[unit]
+            if entity ~= true and entity ~= false and is_supported_entity(entity) and entity.unit_number == unit then
                 process_enabled_entity(entity)
             else
                 s.enabled_by_unit[unit] = nil -- remove stale entry
