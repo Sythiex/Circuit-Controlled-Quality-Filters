@@ -1,15 +1,15 @@
 # Circuit-Controlled Quality Filters
 
-### This mod allows you to set generic quality filters (no specific item selected) on inserters and splitters using circuits.
+### This mod allows you to set generic quality filters (no specific item selected) on inserters, splitters, and loaders using circuits.
 
 ## TLDR how to use:
-1. Open an inserter or splitter
+1. Open an inserter, splitter, or compatible loader
 2. Enable **"Set filters with quality signals"**
 3. Send quality + (optional) comparator + (optional) item signals on the connected circuit network.
 
 ## longer boring description:
 
-When opening an inserter or splitter interface you will see a new option: "Set filters with quality signals".
+When you open a filterable inserter, splitter, or loader, you’ll see a new option: "Set filters with quality signals".
 ![Set filters with quality signals checkbox](https://i.imgur.com/B7JXvDN.png)
 
 Setting this option will allow the entity to read quality signals from connected circuit networks and set its filters to match. This mod adds quality signals to the Signals tab for convenience, but you can also use the ones found in the Unsorted tab.
@@ -22,7 +22,8 @@ You can also set filters for specific items (instead of generic quality-only fil
 
 ## Other Notes
 - This mod should automatically support qualities added by other mods.
-- Currently inserters and splitters are supported. Additional entity types may be added later.
+- Inserters, splitters, and loaders with circuit connections and filter slots are supported, including those added by other mods.
+- Loaders with per-lane filtering use the two highest-priority quality filters, one for each lane. If only one quality filter is available, it is applied to both lanes.
 - ***This is a beta release, expect to run into bugs and backup your save before installing/updating.***
 
 ## Known Issues/Limitations:

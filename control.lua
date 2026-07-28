@@ -4,17 +4,20 @@ local TAG_KEY = "quality_control_set_filters"
 local QUALITY_PROXY_PREFIX = "ccqf-quality-"
 local FAST_REPLACE_WINDOW_TICKS = 6
 
-local SUPPORTED_ENTITY_EVENT_FILTERS = {
-    {filter = "type", type = "inserter"},
-    {filter = "type", type = "splitter"}
+local SUPPORTED_ENTITY_TYPES = {
+    "inserter",
+    "splitter",
+    "loader",
+    "loader-1x1"
 }
 
-local SUPPORTED_OR_GHOST_EVENT_FILTERS = {
-    {filter = "type", type = "inserter"},
-    {filter = "type", type = "splitter"},
-    {filter = "ghost_type", type = "inserter"},
-    {filter = "ghost_type", type = "splitter"}
-}
+local SUPPORTED_ENTITY_EVENT_FILTERS = {}
+local SUPPORTED_OR_GHOST_EVENT_FILTERS = {}
+for _, entity_type in ipairs(SUPPORTED_ENTITY_TYPES) do
+    table.insert(SUPPORTED_ENTITY_EVENT_FILTERS, {filter = "type", type = entity_type})
+    table.insert(SUPPORTED_OR_GHOST_EVENT_FILTERS, {filter = "type", type = entity_type})
+    table.insert(SUPPORTED_OR_GHOST_EVENT_FILTERS, {filter = "ghost_type", type = entity_type})
+end
 
 local DEFAULT_BATCH_SIZE = 100
 local BATCH_SIZE = DEFAULT_BATCH_SIZE
@@ -49,6 +52,21 @@ local function get_entity_type(entity)
         return entity.ghost_type
     end
     return entity.type
+end
+
+local function get_entity_prototype(entity)
+    if not (entity and entity.valid) then
+        return nil
+    end
+    if entity.type == "entity-ghost" then
+        return entity.ghost_prototype
+    end
+    return entity.prototype
+end
+
+local function has_circuit_connector(entity)
+    local prototype = get_entity_prototype(entity)
+    return prototype and prototype.get_max_circuit_wire_distance() > 0 or false
 end
 
 -- Turns off "Set filters" from circuit network, turns on "Use filters", turns on "Whitelist" for inserters
@@ -88,7 +106,27 @@ local function ensure_correct_filter_settings_splitter(entity)
 
 end
 
-local function get_inserter_max_filters(entity)
+-- Turns off "Set filters" from circuit network and enables whitelist filtering for loaders
+local function ensure_correct_filter_settings_loader(entity)
+    if not (entity and entity.valid and (entity.type == "loader" or entity.type == "loader-1x1")) then
+        return
+    end
+
+    if (entity.filter_slot_count or 0) == 0 then
+        return
+    end
+
+    local control_behavior = entity.get_control_behavior()
+    if control_behavior and control_behavior.valid and control_behavior.circuit_set_filters then
+        control_behavior.circuit_set_filters = false
+    end
+
+    if entity.loader_filter_mode ~= "whitelist" then
+        entity.loader_filter_mode = "whitelist"
+    end
+end
+
+local function get_filter_slot_count(entity)
     if not (entity and entity.valid) then
         return 0
     end
@@ -101,11 +139,25 @@ local function get_inserter_max_filters(entity)
     return entity.filter_slot_count or 0
 end
 
+-- Mirror a single filter so per-lane loaders apply it to both lanes
+local function adjust_loader_filters(entity, filters)
+    local prototype = get_entity_prototype(entity)
+    if prototype and prototype.per_lane_filters and filters[1] and not filters[2] then
+        local first = filters[1]
+        filters[2] = {
+            name = first.name,
+            quality = first.quality,
+            comparator = first.comparator
+        }
+    end
+    return filters
+end
+
 local ENTITY_CONFIG = {
     inserter = {
         gui = defines.relative_gui_type.inserter_gui,
         ensure_settings = ensure_correct_filter_settings_inserter,
-        get_max_filters = get_inserter_max_filters,
+        get_max_filters = get_filter_slot_count,
         get_filter = function(entity, index)
             return entity.get_filter(index)
         end,
@@ -136,6 +188,25 @@ local ENTITY_CONFIG = {
         allow_item_quality = true
     }
 }
+
+local LOADER_CONFIG = {
+    gui = defines.relative_gui_type.loader_gui,
+    ensure_settings = ensure_correct_filter_settings_loader,
+    get_max_filters = get_filter_slot_count,
+    get_filter = function(entity, index)
+        return entity.get_filter(index)
+    end,
+    set_filter = function(entity, index, value)
+        entity.set_filter(index, value)
+    end,
+    is_compatible = has_circuit_connector,
+    adjust_filters = adjust_loader_filters,
+    allow_quality_only = true,
+    allow_item_quality = true
+}
+
+ENTITY_CONFIG.loader = LOADER_CONFIG
+ENTITY_CONFIG["loader-1x1"] = LOADER_CONFIG
 
 local function get_entity_config(entity)
     local entity_type = get_entity_type(entity)
@@ -174,11 +245,16 @@ local function is_supported_entity(entity)
         return false
     end
 
-    if not get_entity_config(entity) then
+    local cfg = get_entity_config(entity)
+    if not cfg then
         return false
     end
 
     if get_max_filters(entity) == 0 then
+        return false
+    end
+
+    if cfg.is_compatible and not cfg.is_compatible(entity) then
         return false
     end
 
@@ -191,10 +267,14 @@ local function is_supported_or_ghost(entity)
     end
 
     if entity.type == "entity-ghost" then
-        if not get_entity_config(entity) then
+        local cfg = get_entity_config(entity)
+        if not cfg then
             return false
         end
-        return get_max_filters(entity) > 0
+        if get_max_filters(entity) == 0 then
+            return false
+        end
+        return not cfg.is_compatible or cfg.is_compatible(entity)
     end
 
     return is_supported_entity(entity)
@@ -345,7 +425,7 @@ local function migrate_enabled_entity_references(s)
     -- Replace those booleans with LuaEntity references.
     for _, surface in pairs(game.surfaces) do
         local entities = surface.find_entities_filtered {
-            type = {"inserter", "splitter"}
+            type = SUPPORTED_ENTITY_TYPES
         }
         for _, entity in pairs(entities) do
             local unit = entity.unit_number
@@ -963,6 +1043,10 @@ local function process_enabled_entity(entity)
                 comparator = comparator
             }
         end
+    end
+
+    if cfg.adjust_filters then
+        filters = cfg.adjust_filters(entity, filters)
     end
 
     apply_entity_filters(entity, filters)

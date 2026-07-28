@@ -1,8 +1,9 @@
 ---------------------------------------------------------------------------------------------------
 Version: 0.4.0
-Date: 2026.07.27
-  Changes:
+Date: 2026.07.28
+  Features:
     - Updated for 2.1
+    - Added loader support
   Optimizations:
     - Minor performance improvements
   Bugfixes:
