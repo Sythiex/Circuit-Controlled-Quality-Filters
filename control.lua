@@ -88,13 +88,24 @@ local function ensure_correct_filter_settings_splitter(entity)
 
 end
 
+local function get_inserter_max_filters(entity)
+    if not (entity and entity.valid) then
+        return 0
+    end
+
+    if entity.type == "entity-ghost" then
+        local prototype = entity.ghost_prototype
+        return (prototype and prototype.filter_count) or 0
+    end
+
+    return entity.filter_slot_count or 0
+end
+
 local ENTITY_CONFIG = {
     inserter = {
         gui = defines.relative_gui_type.inserter_gui,
         ensure_settings = ensure_correct_filter_settings_inserter,
-        get_max_filters = function(entity)
-            return entity.filter_slot_count or 0
-        end,
+        get_max_filters = get_inserter_max_filters,
         get_filter = function(entity, index)
             return entity.get_filter(index)
         end,
@@ -180,7 +191,10 @@ local function is_supported_or_ghost(entity)
     end
 
     if entity.type == "entity-ghost" then
-        return ENTITY_CONFIG[entity.ghost_type] ~= nil
+        if not get_entity_config(entity) then
+            return false
+        end
+        return get_max_filters(entity) > 0
     end
 
     return is_supported_entity(entity)
@@ -264,6 +278,11 @@ end
 -- create the setting gui for the player if needed
 local function ensure_gui(player, entity)
     local relative = player.gui.relative
+
+    if not is_supported_or_ghost(entity) then
+        destroy_gui(player)
+        return
+    end
 
     local cfg = get_entity_config(entity)
     if not cfg then
