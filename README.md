@@ -17,7 +17,7 @@ Setting this option will allow the entity to read quality signals from connected
 Comparator signals are also supported (>, <, =, ≥, ≤, ≠). For example, if you want to set the filter for qualities greater than rare, you can send both the "Rare" and "Greater than" signals. If no comparator signal is present the filter will default to "=". If multiple comparator signals are present, the highest-value one wins.
 ![Comparator example](https://i.imgur.com/NtIdDZC.png)
 
-You can also set filters for specific items (instead of generic quality-only filters). If multiple quality and/or item signals are sent, the mod creates a filter for each quality × item combination, ordered by highest quality tier and highest item signal value (limited by available filter slots).
+You can also set filters for specific items (instead of generic quality-only filters). If multiple quality and/or item signals are sent, the mod creates a filter for each quality × item combination, ordered by highest quality signal value and highest item signal value (limited by available filter slots).
 ![Item example](https://i.imgur.com/BcVk9If.png)
 
 ## Other Notes
@@ -26,5 +26,5 @@ You can also set filters for specific items (instead of generic quality-only fil
 - ***This is a beta release, expect to run into bugs and backup your save before installing/updating.***
 
 ## Known Issues/Limitations:
-- The vanilla circuit-controlled "Set filters" option doesn't support generic quality filters, so it is disabled while this mod's setting is active. When "Set filters with quality signals" is enabled, this mod takes control of the  filter settings ("Use filters" ON, "Whitelist", "Set filters" OFF).
+- The vanilla circuit-controlled "Set filters" option doesn't support generic quality filters, so it is disabled while this mod's setting is active. When "Set filters with quality signals" is enabled, this mod takes control of the filter settings ("Use filters" ON, "Whitelist", "Set filters" OFF).
 - Removing an entity with "Set filters with quality signals" enabled then restoring it with the Undo action does not keep its setting.
