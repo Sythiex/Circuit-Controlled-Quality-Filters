@@ -536,11 +536,14 @@ script.on_event(defines.events.on_gui_opened, function(e)
     end
 end)
 
--- Clear "currently open entity" when GUI closes
+-- Clear only when the tracked entity's GUI closes
 if defines.events.on_gui_closed then
     script.on_event(defines.events.on_gui_closed, function(e)
         local s = state()
-        s.open_entity_by_player[e.player_index] = nil
+        local open_entity = s.open_entity_by_player[e.player_index]
+        if not (open_entity and open_entity.valid) or e.entity == open_entity then
+            s.open_entity_by_player[e.player_index] = nil
+        end
     end)
 end
 

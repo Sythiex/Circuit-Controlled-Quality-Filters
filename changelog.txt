@@ -1,5 +1,5 @@
 ---------------------------------------------------------------------------------------------------
-Version: 0.4.0
+Version: 1.0.0
 Date: 2026.07.28
   Features:
     - Updated for 2.1
@@ -13,6 +13,7 @@ Date: 2026.07.28
     - Fixed "Set filters with quality signals" not being retained during fast replacement on space platforms
     - Fixed "Set filters with quality signals" being shown for inserter ghosts that do not support filters
     - Fixed "Set filters with quality signals" being shown for modded inserters and splitters without circuit connections
+    - Fixed "Set filters with quality signals" failing to save when another GUI-close event fired first
     - Fixed red and green circuit signals being combined incorrectly when either signal was negative
     - Fixed native and proxy signals for the same quality creating duplicate filters. Their values are now summed.
 ---------------------------------------------------------------------------------------------------
