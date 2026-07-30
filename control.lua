@@ -4,6 +4,19 @@ local TAG_KEY = "quality_control_set_filters"
 local QUALITY_PROXY_PREFIX = "ccqf-quality-"
 local FAST_REPLACE_WINDOW_TICKS = 6
 
+local filter_cache_by_unit = {}
+local process_enabled_entity
+
+local function invalidate_filter_cache(unit_number)
+    if unit_number then
+        filter_cache_by_unit[unit_number] = nil
+    end
+end
+
+local function clear_filter_cache()
+    filter_cache_by_unit = {}
+end
+
 local SUPPORTED_ENTITY_TYPES = {
     "inserter",
     "splitter",
@@ -223,41 +236,31 @@ local function get_max_filters(entity)
     return cfg.get_max_filters(entity) or 0
 end
 
-local function get_filter_at(entity, index)
-    local cfg = get_entity_config(entity)
-    if not cfg or not cfg.get_filter then
-        return nil
-    end
-    return cfg.get_filter(entity, index)
-end
-
-local function set_filter_at(entity, index, value)
-    local cfg = get_entity_config(entity)
-    if not cfg or not cfg.set_filter then
-        return
-    end
-    cfg.set_filter(entity, index, value)
-end
-
-local function is_supported_entity(entity)
+local function get_supported_entity_context(entity)
     if not (entity and entity.valid and entity.unit_number and entity.type ~= "entity-ghost") then
-        return false
+        return nil
     end
 
     local cfg = get_entity_config(entity)
     if not cfg then
-        return false
+        return nil
     end
 
-    if get_max_filters(entity) == 0 then
-        return false
+    local max_slots = cfg.get_max_filters and cfg.get_max_filters(entity) or 0
+    if max_slots == 0 then
+        return nil
     end
 
     if not has_circuit_connector(entity) then
-        return false
+        return nil
     end
 
-    return true
+    return cfg, max_slots
+end
+
+local function is_supported_entity(entity)
+    local cfg = get_supported_entity_context(entity)
+    return cfg ~= nil
 end
 
 local function is_supported_or_ghost(entity)
@@ -279,7 +282,7 @@ local function is_supported_or_ghost(entity)
     return is_supported_entity(entity)
 end
 
-local function set_enabled(entity, enabled)
+local function set_enabled(entity, enabled, process_immediately)
     local s = state()
     if entity.type == "entity-ghost" then
         -- ghost tags
@@ -301,13 +304,16 @@ local function set_enabled(entity, enabled)
     local unit = entity.unit_number
     local was_enabled = (s.enabled_by_unit[unit] ~= nil)
     local now_enabled = (enabled == true)
+    invalidate_filter_cache(unit)
 
     if now_enabled then
         if not was_enabled then
             table.insert(s.enabled_unit_array, unit)
         end
         s.enabled_by_unit[unit] = entity
-        if cfg.ensure_settings then
+        if process_immediately then
+            process_enabled_entity(entity, true)
+        elseif cfg.ensure_settings then
             cfg.ensure_settings(entity)
         end
     else
@@ -448,9 +454,16 @@ local function rebuild_enabled_unit_array(s)
             table.insert(array, unit)
         else
             s.enabled_by_unit[unit] = nil
+            invalidate_filter_cache(unit)
         end
     end
     s.enabled_unit_array = array
+
+    for unit in pairs(filter_cache_by_unit) do
+        if s.enabled_by_unit[unit] == nil then
+            invalidate_filter_cache(unit)
+        end
+    end
 
     local after_length = #array
     if after_length == 0 or s.enabled_index > after_length then
@@ -459,6 +472,7 @@ local function rebuild_enabled_unit_array(s)
 end
 
 script.on_init(function()
+    clear_filter_cache()
     update_batch_size()
     local s = state()
     s.open_entity_by_player = {}
@@ -469,6 +483,7 @@ end)
 script.on_load(update_batch_size)
 
 script.on_configuration_changed(function()
+    clear_filter_cache()
     update_batch_size()
     local s = state()
     s.open_entity_by_player = {}
@@ -506,6 +521,10 @@ script.on_event(defines.events.on_player_created, function(e)
     end
 end)
 
+script.on_event(defines.events.on_player_joined_game, function()
+    clear_filter_cache()
+end)
+
 script.on_event(defines.events.on_player_removed, function(e)
     local s = state()
     s.open_entity_by_player[e.player_index] = nil
@@ -530,6 +549,11 @@ script.on_event(defines.events.on_gui_opened, function(e)
         if checkbox then
             checkbox.state = get_enabled(entity) -- sync checkbox setting from saved state
         end
+
+        local unit = entity.unit_number
+        if unit and s.enabled_by_unit[unit] == entity then
+            process_enabled_entity(entity, true)
+        end
     else
         s.open_entity_by_player[e.player_index] = nil
         destroy_gui(player)
@@ -541,7 +565,16 @@ if defines.events.on_gui_closed then
     script.on_event(defines.events.on_gui_closed, function(e)
         local s = state()
         local open_entity = s.open_entity_by_player[e.player_index]
-        if not (open_entity and open_entity.valid) or e.entity == open_entity then
+        if not (open_entity and open_entity.valid) then
+            s.open_entity_by_player[e.player_index] = nil
+            return
+        end
+
+        if e.entity == open_entity then
+            local unit = open_entity.unit_number
+            if unit and s.enabled_by_unit[unit] == open_entity then
+                process_enabled_entity(open_entity, true)
+            end
             s.open_entity_by_player[e.player_index] = nil
         end
     end)
@@ -560,7 +593,7 @@ script.on_event(defines.events.on_gui_checked_state_changed, function(e)
         return
     end
 
-    set_enabled(entity, element.state)
+    set_enabled(entity, element.state, true)
 end)
 
 -- Cleanup stored state when entity is removed to avoid stale entries
@@ -569,6 +602,7 @@ local function cleanup_entity(entity)
         return
     end
     local s = state()
+    invalidate_filter_cache(entity.unit_number)
     if s.enabled_by_unit[entity.unit_number] == entity then
         s.enabled_by_unit[entity.unit_number] = nil
     end
@@ -674,7 +708,7 @@ local function on_entity_copied(e)
     end
 
     local enabled = get_enabled(source)
-    set_enabled(destination, enabled)
+    set_enabled(destination, enabled, true)
     sync_checkbox_for_entity(destination)
 end
 
@@ -692,7 +726,7 @@ script.on_event(defines.events.on_blueprint_settings_pasted, function(e)
         tags = entity.tags
     end
 
-    set_enabled(entity, tags and tags[TAG_KEY] == true)
+    set_enabled(entity, tags and tags[TAG_KEY] == true, true)
     sync_checkbox_for_entity(entity)
 end)
 
@@ -773,6 +807,40 @@ local function gather_signals(entity)
         defines.wire_connector_id.circuit_red,
         defines.wire_connector_id.circuit_green
     ) or {}
+end
+
+local function signals_match_snapshot(signals, snapshot)
+    if #signals ~= #snapshot then
+        return false
+    end
+
+    for index, signal in ipairs(signals) do
+        local id = signal.signal
+        local cached = snapshot[index]
+        if cached.type ~= (id and id.type or nil)
+            or cached.name ~= (id and id.name or nil)
+            or cached.quality ~= (id and id.quality or nil)
+            or cached.count ~= (signal.count or 0)
+        then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function copy_signal_snapshot(signals)
+    local snapshot = {}
+    for index, signal in ipairs(signals) do
+        local id = signal.signal
+        snapshot[index] = {
+            type = id and id.type or nil,
+            name = id and id.name or nil,
+            quality = id and id.quality or nil,
+            count = signal.count or 0
+        }
+    end
+    return snapshot
 end
 
 -- Filter/sort quality signals out of a combined signal list
@@ -960,47 +1028,21 @@ local function are_filters_equal(a, b)
         and normalize_comparator(a.comparator) == normalize_comparator(b.comparator)
 end
 
--- desired_filters: array of ItemFilter (or nil)
-local function apply_entity_filters(entity, desired_filters)
-    if not is_supported_entity(entity) then
-        return
-    end
-
-    local cfg = get_entity_config(entity)
-    if not cfg then
-        return
-    end
-
+local function enforce_entity_filters(entity, cfg, max_slots, desired_filters)
     if cfg.ensure_settings then
         cfg.ensure_settings(entity)
     end
 
-    local max_slots = get_max_filters(entity)
     for i = 1, max_slots do
         local want = desired_filters[i]
-        local current = get_filter_at(entity, i)
+        local current = cfg.get_filter(entity, i)
         if not are_filters_equal(current, want) then
-            set_filter_at(entity, i, want)
+            cfg.set_filter(entity, i, want)
         end
     end
 end
 
-local function process_enabled_entity(entity)
-    if not is_supported_entity(entity) then
-        return
-    end
-
-    local cfg = get_entity_config(entity)
-    if not cfg then
-        return
-    end
-
-    local max_slots = get_max_filters(entity)
-    if max_slots == 0 then
-        return
-    end
-
-    local signals = gather_signals(entity)
+local function build_desired_filter_result(entity, cfg, max_slots, signals)
     local qualities = extract_quality_signals_sorted(signals)
     local items = extract_item_signals_sorted(signals)
     local comparator, conflict = extract_comparator_signal(signals)
@@ -1008,8 +1050,10 @@ local function process_enabled_entity(entity)
 
     -- clear filters if strongest comparator signals are tied
     if conflict then
-        apply_entity_filters(entity, filters)
-        return
+        return {
+            filters = filters,
+            should_apply = true
+        }
     end
 
     -- Build desired filters in sorted order
@@ -1037,7 +1081,10 @@ local function process_enabled_entity(entity)
         end
     else
         if not cfg.allow_quality_only then
-            return
+            return {
+                filters = filters,
+                should_apply = false
+            }
         end
         for i, entry in ipairs(qualities) do
             filters[i] = {
@@ -1051,12 +1098,66 @@ local function process_enabled_entity(entity)
         filters = cfg.adjust_filters(entity, filters)
     end
 
-    apply_entity_filters(entity, filters)
+    return {
+        filters = filters,
+        should_apply = true
+    }
+end
+
+process_enabled_entity = function(entity, force_enforcement)
+    local cfg, max_slots = get_supported_entity_context(entity)
+    if not cfg then
+        return false
+    end
+
+    local signals = gather_signals(entity)
+    local unit = entity.unit_number
+    local cached = filter_cache_by_unit[unit]
+    if cached and signals_match_snapshot(signals, cached.signals) then
+        if force_enforcement and cached.should_apply then
+            enforce_entity_filters(entity, cfg, max_slots, cached.filters)
+        end
+        return true
+    end
+
+    local result = build_desired_filter_result(entity, cfg, max_slots, signals)
+    if result.should_apply then
+        enforce_entity_filters(entity, cfg, max_slots, result.filters)
+    end
+
+    filter_cache_by_unit[unit] = {
+        signals = copy_signal_snapshot(signals),
+        filters = result.filters,
+        should_apply = result.should_apply
+    }
+    return true
+end
+
+local function process_open_entities(s)
+    local processed_units = {}
+
+    for player_index, entity in pairs(s.open_entity_by_player) do
+        if not (entity and entity.valid) then
+            s.open_entity_by_player[player_index] = nil
+        elseif entity.type ~= "entity-ghost" then
+            local unit = entity.unit_number
+            if unit
+                and not processed_units[unit]
+                and s.enabled_by_unit[unit] == entity
+                and process_enabled_entity(entity, true)
+            then
+                processed_units[unit] = true
+            end
+        end
+    end
+
+    return processed_units
 end
 
 -- loop through enabled entities in batches
 script.on_event(defines.events.on_tick, function()
     local s = state()
+    local processed_units = process_open_entities(s)
     local list = s.enabled_unit_array
     local n = #list
     if n == 0 then
@@ -1074,10 +1175,19 @@ script.on_event(defines.events.on_tick, function()
 
         if unit then
             local entity = s.enabled_by_unit[unit]
-            if entity ~= true and entity ~= false and is_supported_entity(entity) and entity.unit_number == unit then
-                process_enabled_entity(entity)
+            if entity ~= true
+                and entity ~= false
+                and entity
+                and entity.valid
+                and entity.unit_number == unit
+            then
+                if not processed_units[unit] and not process_enabled_entity(entity, false) then
+                    s.enabled_by_unit[unit] = nil
+                    invalidate_filter_cache(unit)
+                end
             else
                 s.enabled_by_unit[unit] = nil -- remove stale entry
+                invalidate_filter_cache(unit)
             end
         end
     end

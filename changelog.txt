@@ -1,11 +1,12 @@
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.0
-Date: 2026.07.28
+Date: 2026.07.30
   Features:
     - Updated for 2.1
     - Added loader support
   Optimizations:
-    - Minor performance improvements
+    - Improved performance when circuit signals remain unchanged (thanks Mr00Anderson)
+    - Other minor performance improvements
   Bugfixes:
     - Fixed this mod not working with some modded inserters and splitters
     - Fixed the batch size setting not being restored when loading saves or joining multiplayer games
