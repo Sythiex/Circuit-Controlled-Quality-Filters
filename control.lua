@@ -176,9 +176,7 @@ local ENTITY_CONFIG = {
         end,
         set_filter = function(entity, index, value)
             entity.set_filter(index, value)
-        end,
-        allow_quality_only = true,
-        allow_item_quality = true
+        end
     },
     splitter = {
         gui = defines.relative_gui_type.splitter_gui,
@@ -196,9 +194,7 @@ local ENTITY_CONFIG = {
             if index == 1 then
                 entity.splitter_filter = value
             end
-        end,
-        allow_quality_only = true,
-        allow_item_quality = true
+        end
     }
 }
 
@@ -212,9 +208,7 @@ local LOADER_CONFIG = {
     set_filter = function(entity, index, value)
         entity.set_filter(index, value)
     end,
-    adjust_filters = adjust_loader_filters,
-    allow_quality_only = true,
-    allow_item_quality = true
+    adjust_filters = adjust_loader_filters
 }
 
 ENTITY_CONFIG.loader = LOADER_CONFIG
@@ -228,16 +222,13 @@ local function get_entity_config(entity)
     return ENTITY_CONFIG[entity_type]
 end
 
-local function get_max_filters(entity)
-    local cfg = get_entity_config(entity)
-    if not cfg or not cfg.get_max_filters then
-        return 0
+local function get_supported_context(entity)
+    if not (entity and entity.valid) then
+        return nil
     end
-    return cfg.get_max_filters(entity) or 0
-end
 
-local function get_supported_entity_context(entity)
-    if not (entity and entity.valid and entity.unit_number and entity.type ~= "entity-ghost") then
+    local is_ghost = entity.type == "entity-ghost"
+    if not is_ghost and not entity.unit_number then
         return nil
     end
 
@@ -255,6 +246,15 @@ local function get_supported_entity_context(entity)
         return nil
     end
 
+    return cfg, max_slots, is_ghost
+end
+
+local function get_supported_entity_context(entity)
+    local cfg, max_slots, is_ghost = get_supported_context(entity)
+    if not cfg or is_ghost then
+        return nil
+    end
+
     return cfg, max_slots
 end
 
@@ -264,27 +264,17 @@ local function is_supported_entity(entity)
 end
 
 local function is_supported_or_ghost(entity)
-    if not (entity and entity.valid) then
-        return false
-    end
-
-    if entity.type == "entity-ghost" then
-        local cfg = get_entity_config(entity)
-        if not cfg then
-            return false
-        end
-        if get_max_filters(entity) == 0 then
-            return false
-        end
-        return has_circuit_connector(entity)
-    end
-
-    return is_supported_entity(entity)
+    local cfg = get_supported_context(entity)
+    return cfg ~= nil
 end
 
 local function set_enabled(entity, enabled, process_immediately)
-    local s = state()
-    if entity.type == "entity-ghost" then
+    local cfg, _, is_ghost = get_supported_context(entity)
+    if not cfg then
+        return
+    end
+
+    if is_ghost then
         -- ghost tags
         local tags = entity.tags or {}
         tags[TAG_KEY] = enabled and true or nil
@@ -292,15 +282,7 @@ local function set_enabled(entity, enabled, process_immediately)
         return
     end
 
-    if not is_supported_entity(entity) then
-        return
-    end
-
-    local cfg = get_entity_config(entity)
-    if not cfg then
-        return
-    end
-
+    local s = state()
     local unit = entity.unit_number
     local was_enabled = (s.enabled_by_unit[unit] ~= nil)
     local now_enabled = (enabled == true)
@@ -322,16 +304,17 @@ local function set_enabled(entity, enabled, process_immediately)
 end
 
 local function get_enabled(entity)
-    local s = state()
-    if entity.type == "entity-ghost" then
+    local cfg, _, is_ghost = get_supported_context(entity)
+    if not cfg then
+        return false
+    end
+
+    if is_ghost then
         local tags = entity.tags
         return tags and tags[TAG_KEY] == true or false
     end
 
-    if not is_supported_entity(entity) then
-        return false
-    end
-
+    local s = state()
     return s.enabled_by_unit[entity.unit_number] == entity
 end
 
@@ -364,12 +347,7 @@ end
 local function ensure_gui(player, entity)
     local relative = player.gui.relative
 
-    if not is_supported_or_ghost(entity) then
-        destroy_gui(player)
-        return
-    end
-
-    local cfg = get_entity_config(entity)
+    local cfg = get_supported_context(entity)
     if not cfg then
         destroy_gui(player)
         return
@@ -953,19 +931,25 @@ local function extract_item_signals_sorted(combined_signals)
     return present
 end
 
+local COMPARATOR_BY_SIGNAL = {
+    ["signal-greater-than"] = ">",
+    ["signal-less-than"] = "<",
+    ["signal-equal"] = "=",
+    ["signal-greater-than-or-equal-to"] = ">=",
+    ["signal-less-than-or-equal-to"] = "<=",
+    ["signal-not-equal"] = "!="
+}
+
+local COMPARATOR_ALIASES = {
+    ["≥"] = ">=",
+    ["≤"] = "<=",
+    ["≠"] = "!="
+}
+
 -- Returns:
 --   comparator :: ComparatorString (e.g. "=", ">", "<", ">=", "<=", "!=")
 --   conflict   :: boolean  (true if strongest comparator is tied with another)
 local function extract_comparator_signal(signals)
-    local MAP = {
-        ["signal-greater-than"] = ">",
-        ["signal-less-than"] = "<",
-        ["signal-equal"] = "=",
-        ["signal-greater-than-or-equal-to"] = ">=",
-        ["signal-less-than-or-equal-to"] = "<=",
-        ["signal-not-equal"] = "!="
-    }
-
     local best = "="
     local best_count = 0
     local conflict = false
@@ -974,7 +958,7 @@ local function extract_comparator_signal(signals)
         local id = s.signal
         local c = s.count or 0
         if c > 0 and id and id.type == "virtual" then
-            local comparator = MAP[id.name]
+            local comparator = COMPARATOR_BY_SIGNAL[id.name]
             if comparator then
                 if c > best_count then
                     best = comparator
@@ -997,12 +981,6 @@ local function extract_comparator_signal(signals)
 
     return best, false
 end
-
-local COMPARATOR_ALIASES = {
-    ["≥"] = ">=",
-    ["≤"] = "<=",
-    ["≠"] = "!="
-}
 
 -- Factorio accepts ASCII comparator aliases but returns their symbol forms when filters are read back.
 local function normalize_comparator(comparator)
@@ -1042,7 +1020,7 @@ local function enforce_entity_filters(entity, cfg, max_slots, desired_filters)
     end
 end
 
-local function build_desired_filter_result(entity, cfg, max_slots, signals)
+local function build_desired_filters(entity, cfg, max_slots, signals)
     local qualities = extract_quality_signals_sorted(signals)
     local items = extract_item_signals_sorted(signals)
     local comparator, conflict = extract_comparator_signal(signals)
@@ -1050,17 +1028,10 @@ local function build_desired_filter_result(entity, cfg, max_slots, signals)
 
     -- clear filters if strongest comparator signals are tied
     if conflict then
-        return {
-            filters = filters,
-            should_apply = true
-        }
+        return filters
     end
 
     -- Build desired filters in sorted order
-    if not cfg.allow_item_quality then
-        items = {}
-    end
-
     if #items > 0 and qualities[1] then
         local slot = 1
         for _, q in ipairs(qualities) do
@@ -1080,13 +1051,8 @@ local function build_desired_filter_result(entity, cfg, max_slots, signals)
             end
         end
     else
-        if not cfg.allow_quality_only then
-            return {
-                filters = filters,
-                should_apply = false
-            }
-        end
-        for i, entry in ipairs(qualities) do
+        for i = 1, math.min(#qualities, max_slots) do
+            local entry = qualities[i]
             filters[i] = {
                 quality = entry.quality,
                 comparator = comparator
@@ -1098,10 +1064,7 @@ local function build_desired_filter_result(entity, cfg, max_slots, signals)
         filters = cfg.adjust_filters(entity, filters)
     end
 
-    return {
-        filters = filters,
-        should_apply = true
-    }
+    return filters
 end
 
 process_enabled_entity = function(entity, force_enforcement)
@@ -1114,21 +1077,18 @@ process_enabled_entity = function(entity, force_enforcement)
     local unit = entity.unit_number
     local cached = filter_cache_by_unit[unit]
     if cached and signals_match_snapshot(signals, cached.signals) then
-        if force_enforcement and cached.should_apply then
+        if force_enforcement then
             enforce_entity_filters(entity, cfg, max_slots, cached.filters)
         end
         return true
     end
 
-    local result = build_desired_filter_result(entity, cfg, max_slots, signals)
-    if result.should_apply then
-        enforce_entity_filters(entity, cfg, max_slots, result.filters)
-    end
+    local filters = build_desired_filters(entity, cfg, max_slots, signals)
+    enforce_entity_filters(entity, cfg, max_slots, filters)
 
     filter_cache_by_unit[unit] = {
         signals = copy_signal_snapshot(signals),
-        filters = result.filters,
-        should_apply = result.should_apply
+        filters = filters
     }
     return true
 end
