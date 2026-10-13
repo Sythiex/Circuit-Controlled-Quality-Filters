@@ -1,2 +1,5 @@
 .vscode/
 AGENTS.md
+.factorio-local.json
+.build/
+*.zip
