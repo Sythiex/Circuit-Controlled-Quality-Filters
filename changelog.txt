@@ -3,6 +3,7 @@ Version: 1.1.0
 Date: 2026.10.13
   Features:
     - Inserters and loaders now allow Blacklist filter mode
+    - Added support for the "Any quality" signal as a comparator
 ---------------------------------------------------------------------------------------------------
 Version: 1.0.0
 Date: 2026.07.31

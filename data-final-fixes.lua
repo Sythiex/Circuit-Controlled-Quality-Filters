@@ -63,4 +63,11 @@ for qname, q in pairs(data.raw["quality"] or {}) do
     to_extend[#to_extend + 1] = vs
 end
 
+local any_quality_proxy = util.table.deepcopy(data.raw["virtual-signal"]["signal-any-quality"])
+any_quality_proxy.name = "ccqf-any-quality"
+any_quality_proxy.subgroup = "ccqf-quality-proxies"
+any_quality_proxy.order = "z[any-quality]"
+any_quality_proxy.localised_name = any_quality_proxy.localised_name or {"virtual-signal-name.signal-any-quality"}
+to_extend[#to_extend + 1] = any_quality_proxy
+
 data:extend(to_extend)

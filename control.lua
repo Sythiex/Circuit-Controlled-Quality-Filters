@@ -939,7 +939,9 @@ local COMPARATOR_BY_SIGNAL = {
     ["signal-equal"] = "=",
     ["signal-greater-than-or-equal-to"] = ">=",
     ["signal-less-than-or-equal-to"] = "<=",
-    ["signal-not-equal"] = "!="
+    ["signal-not-equal"] = "!=",
+    ["signal-any-quality"] = "any",
+    ["ccqf-any-quality"] = "any"
 }
 
 local COMPARATOR_ALIASES = {
@@ -949,27 +951,32 @@ local COMPARATOR_ALIASES = {
 }
 
 -- Returns:
---   comparator :: ComparatorString (e.g. "=", ">", "<", ">=", "<=", "!=")
+--   comparator :: ComparatorString (e.g. "=", ">", "<", ">=", "<=", "!=" or "any")
 --   conflict   :: boolean  (true if strongest comparator is tied with another)
 local function extract_comparator_signal(signals)
+    local by_comparator = {}
+    for _, s in ipairs(signals or {}) do
+        local id = s.signal
+        if id and id.type == "virtual" then
+            local comparator = COMPARATOR_BY_SIGNAL[id.name]
+            if comparator then
+                -- Combine native and proxy counts before checking positivity or priority
+                by_comparator[comparator] = (by_comparator[comparator] or 0) + (s.count or 0)
+            end
+        end
+    end
+
     local best = "="
     local best_count = 0
     local conflict = false
 
-    for _, s in ipairs(signals or {}) do
-        local id = s.signal
-        local c = s.count or 0
-        if c > 0 and id and id.type == "virtual" then
-            local comparator = COMPARATOR_BY_SIGNAL[id.name]
-            if comparator then
-                if c > best_count then
-                    best = comparator
-                    best_count = c
-                    conflict = false
-                elseif c == best_count and comparator ~= best then
-                    conflict = true
-                end
-            end
+    for comparator, c in pairs(by_comparator) do
+        if c > best_count then
+            best = comparator
+            best_count = c
+            conflict = false
+        elseif c > 0 and c == best_count and comparator ~= best then
+            conflict = true
         end
     end
 
@@ -1034,7 +1041,12 @@ local function build_desired_filters(entity, cfg, max_slots, signals)
     end
 
     -- Build desired filters in sorted order
-    if #items > 0 and qualities[1] then
+    if comparator == "any" then
+        for i = 1, math.min(#items, max_slots) do
+            -- Omitting both quality and comparator creates an unrestricted-quality item filter
+            filters[i] = {name = items[i].name}
+        end
+    elseif #items > 0 and qualities[1] then
         local slot = 1
         for _, q in ipairs(qualities) do
             for _, it in ipairs(items) do
