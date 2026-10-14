@@ -23,8 +23,9 @@ You can also set filters for specific items (instead of generic quality-only fil
 ## Other Notes
 - This mod should automatically support qualities added by other mods.
 - Inserters, splitters, and loaders with circuit connections and filter slots are supported, including those added by other mods.
-- Loaders with per-lane filtering use the two highest-priority quality filters, one for each lane. If only one quality filter is available, it is applied to both lanes.
+- Loaders with per-lane filtering in Whitelist mode use the two highest-priority quality filters, one for each lane. If only one quality filter is available, it is applied to both lanes. In Blacklist mode only the highest-priority quality filter is applied to both lanes.
+- If there are no positive quality signals or conflicting comparator signals, the filters are cleared.
 
 ## Known Issues/Limitations:
-- The vanilla circuit-controlled "Set filters" option doesn't support generic quality filters, so it is disabled while this mod's setting is active. When "Set filters with quality signals" is enabled, this mod takes control of the filter settings ("Use filters" ON, "Whitelist", "Set filters" OFF).
+- The vanilla circuit-controlled "Set filters" option doesn't support generic quality filters, so it is disabled while this mod's setting is active. When "Set filters with quality signals" is enabled, this mod takes control of the filter settings ("Use filters" ON, "Set filters" OFF).
 - Removing an entity with "Set filters with quality signals" enabled then restoring it with the Undo action does not keep its setting.

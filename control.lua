@@ -82,7 +82,7 @@ local function has_circuit_connector(entity)
     return prototype and prototype.get_max_circuit_wire_distance() > 0 or false
 end
 
--- Turns off "Set filters" from circuit network, turns on "Use filters", turns on "Whitelist" for inserters
+-- Turns off "Set filters" from circuit network and turns on "Use filters" for inserters
 local function ensure_correct_filter_settings_inserter(entity)
     if not (entity and entity.valid and entity.type == "inserter") then
         return
@@ -100,10 +100,6 @@ local function ensure_correct_filter_settings_inserter(entity)
     if not entity.use_filters then
         entity.use_filters = true
     end
-
-    if entity.inserter_filter_mode ~= "whitelist" then
-        entity.inserter_filter_mode = "whitelist"
-    end
 end
 
 -- Turns off "Set filters" from circuit network for splitters
@@ -119,7 +115,7 @@ local function ensure_correct_filter_settings_splitter(entity)
 
 end
 
--- Turns off "Set filters" from circuit network and enables whitelist filtering for loaders
+-- Turns off "Set filters" from circuit network and enables filtering for loaders
 local function ensure_correct_filter_settings_loader(entity)
     if not (entity and entity.valid and (entity.type == "loader" or entity.type == "loader-1x1")) then
         return
@@ -134,7 +130,7 @@ local function ensure_correct_filter_settings_loader(entity)
         control_behavior.circuit_set_filters = false
     end
 
-    if entity.loader_filter_mode ~= "whitelist" then
+    if entity.loader_filter_mode == "none" then
         entity.loader_filter_mode = "whitelist"
     end
 end
@@ -152,10 +148,13 @@ local function get_filter_slot_count(entity)
     return entity.filter_slot_count or 0
 end
 
--- Mirror a single filter so per-lane loaders apply it to both lanes
+-- Mirror a single filter so per-lane loaders apply it to both lanes.
+-- Blacklists must always mirror the top filter to exclude its matches on both lanes.
 local function adjust_loader_filters(entity, filters)
     local prototype = get_entity_prototype(entity)
-    if prototype and prototype.per_lane_filters and filters[1] and not filters[2] then
+    if prototype and prototype.per_lane_filters and filters[1]
+        and (entity.loader_filter_mode == "blacklist" or not filters[2])
+    then
         local first = filters[1]
         filters[2] = {
             name = first.name,
@@ -202,6 +201,9 @@ local LOADER_CONFIG = {
     gui = defines.relative_gui_type.loader_gui,
     ensure_settings = ensure_correct_filter_settings_loader,
     get_max_filters = get_filter_slot_count,
+    get_filter_mode = function(entity)
+        return entity.loader_filter_mode
+    end,
     get_filter = function(entity, index)
         return entity.get_filter(index)
     end,
@@ -1074,9 +1076,11 @@ process_enabled_entity = function(entity, force_enforcement)
     end
 
     local signals = gather_signals(entity)
+    local filter_mode = cfg.get_filter_mode and cfg.get_filter_mode(entity) or nil
     local unit = entity.unit_number
     local cached = filter_cache_by_unit[unit]
-    if cached and signals_match_snapshot(signals, cached.signals) then
+    -- Loader lane assignments can change with the mode even when signals stay the same
+    if cached and cached.filter_mode == filter_mode and signals_match_snapshot(signals, cached.signals) then
         if force_enforcement then
             enforce_entity_filters(entity, cfg, max_slots, cached.filters)
         end
@@ -1088,6 +1092,7 @@ process_enabled_entity = function(entity, force_enforcement)
 
     filter_cache_by_unit[unit] = {
         signals = copy_signal_snapshot(signals),
+        filter_mode = cfg.get_filter_mode and cfg.get_filter_mode(entity) or nil,
         filters = filters
     }
     return true
